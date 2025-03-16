@@ -97,7 +97,7 @@ set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
 SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # Include most packages needed by both client and host
-include(CMake/HermesCommonConfig.cmake)
+find_package(Hermes REQUIRED)
 
 # ENABLE GPU SUPPORT
 if(CHIMAERA_ENABLE_CUDA)
@@ -129,24 +129,6 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 # -----------------------------------------------------------------------------
 # Install Hermes Headers
 # -----------------------------------------------------------------------------
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/CMake/HermesCommonConfig.cmake
-    ${PROJECT_BINARY_DIR}/CMakeFiles/HermesCommonConfig.cmake @ONLY
-)
-
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/CMake/HermesConfig.cmake
-    ${PROJECT_BINARY_DIR}/CMakeFiles/HermesConfig.cmake @ONLY
-)
-
-install(
-    FILES
-    ${PROJECT_BINARY_DIR}/CMakeFiles/HermesCommonConfig.cmake
-    ${PROJECT_BINARY_DIR}/CMakeFiles/HermesConfig.cmake
-    DESTINATION
-    ${CMAKE_INSTALL_PREFIX}/cmake
-)
-
 install(DIRECTORY include DESTINATION ${CMAKE_INSTALL_PREFIX})
 
 jarvis_repo_add("${CMAKE_SOURCE_DIR}/test/jarvis_eternia" "${CMAKE_SOURCE_DIR}/test/jarvis_eternia/pipelines")
