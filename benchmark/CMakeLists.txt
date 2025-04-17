@@ -6,4 +6,5 @@ target_link_libraries(iobench PUBLIC hshm::cudacxx MPI::MPI_CXX cufile)
 
 install(TARGETS
     tensor
+    iobench
     RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)

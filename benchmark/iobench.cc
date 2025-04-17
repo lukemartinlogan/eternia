@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <fcntl.h>
+#include <hermes_shm/util/config_parse.h>
 #include <mpi.h>
 #include <unistd.h>
 
@@ -96,10 +97,15 @@ void cufile_io(const std::string& filename, size_t transfer_size,
   CUfileHandle_t fh;
   CUfileDescr_t params;
   memset(&params, 0, sizeof(params));
-  int fd = open64(filename.c_str(), O_RDWR | O_CREAT, 0666);
+  int fd = open64(filename.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
+  if (fd < 0) {
+    int err = errno;
+    std::cerr << "Error opening file: " << filename << " - " << strerror(err)
+              << std::endl;
+    return;
+  }
   params.handle.fd = fd;
   params.type = CU_FILE_HANDLE_TYPE_OPAQUE_FD;
-
   status = cuFileHandleRegister(&fh, &params);
   if (status.err != CU_FILE_SUCCESS) {
     std::cerr << "cuFileHandleRegister error: " << status.err << std::endl;
@@ -108,6 +114,11 @@ void cufile_io(const std::string& filename, size_t transfer_size,
 
   char* device_buffer;
   cudaMalloc(&device_buffer, transfer_size);
+  cudaStreamSynchronize(0);
+  status = cuFileBufRegister(device_buffer, transfer_size, 0);
+  if (status.err != CU_FILE_SUCCESS) {
+    std::cerr << "cuFileBufRegister error: " << status.err << std::endl;
+  }
 
   std::random_device rd;
   std::mt19937 gen(rd());
@@ -118,7 +129,7 @@ void cufile_io(const std::string& filename, size_t transfer_size,
     for (size_t i = 0; i < num_transfers; ++i) {
       size_t offset =
           (io_pattern == IOPattern::RANDOM) ? distrib(gen) : i * transfer_size;
-      ssize_t ret = cuFileWrite(device_buffer, fh, transfer_size, offset, 0);
+      ssize_t ret = cuFileWrite(fh, device_buffer, transfer_size, offset, 0);
       if (ret < 0) {
         std::cerr << "cuFileWrite error: " << ret << std::endl;
         break;
@@ -129,7 +140,7 @@ void cufile_io(const std::string& filename, size_t transfer_size,
     for (size_t i = 0; i < num_transfers; ++i) {
       size_t offset =
           (io_pattern == IOPattern::RANDOM) ? distrib(gen) : i * transfer_size;
-      ssize_t ret = cuFileRead(device_buffer, fh, transfer_size, offset, 0);
+      ssize_t ret = cuFileRead(fh, device_buffer, transfer_size, offset, 0);
       if (ret < 0) {
         std::cerr << "cuFileRead error: " << ret << std::endl;
         break;
@@ -161,8 +172,8 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  size_t transfer_size = std::stoull(argv[1]);
-  size_t block_size = std::stoull(argv[2]);
+  size_t transfer_size = hshm::ConfigParse::ParseSize(argv[1]);
+  size_t block_size = hshm::ConfigParse::ParseSize(argv[2]);
   std::string io_pattern_str = argv[3];
   std::string io_type_str = argv[4];
   std::string io_engine_str = argv[5];
