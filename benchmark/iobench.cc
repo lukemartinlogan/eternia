@@ -1,5 +1,7 @@
 #include <cuda_runtime.h>
+#include <fcntl.h>
 #include <mpi.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -22,7 +24,7 @@ enum class IOType { READ, WRITE };
 enum class IOEngine { POSIX, CUFILE };
 
 void posix_io(const std::string& filename, size_t transfer_size,
-              size_t total_io_size, IOType io_type, IOPattern io_pattern) {
+              size_t block_size, IOType io_type, IOPattern io_pattern) {
   char* host_buffer;
   char* device_buffer;
 
@@ -41,10 +43,10 @@ void posix_io(const std::string& filename, size_t transfer_size,
     std::vector<char> buffer(transfer_size);
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<size_t> distrib(
-        0, total_io_size - transfer_size);
+    std::uniform_int_distribution<size_t> distrib(0,
+                                                  block_size - transfer_size);
 
-    size_t num_transfers = total_io_size / transfer_size;
+    size_t num_transfers = block_size / transfer_size;
     for (size_t i = 0; i < num_transfers; ++i) {
       size_t offset =
           (io_pattern == IOPattern::RANDOM) ? distrib(gen) : i * transfer_size;
@@ -66,10 +68,10 @@ void posix_io(const std::string& filename, size_t transfer_size,
     std::vector<char> buffer(transfer_size);
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<size_t> distrib(
-        0, total_io_size - transfer_size);
+    std::uniform_int_distribution<size_t> distrib(0,
+                                                  block_size - transfer_size);
 
-    size_t num_transfers = total_io_size / transfer_size;
+    size_t num_transfers = block_size / transfer_size;
     for (size_t i = 0; i < num_transfers; ++i) {
       size_t offset =
           (io_pattern == IOPattern::RANDOM) ? distrib(gen) : i * transfer_size;
@@ -86,16 +88,21 @@ void posix_io(const std::string& filename, size_t transfer_size,
 
 #ifdef USE_CUFILE
 void cufile_io(const std::string& filename, size_t transfer_size,
-               size_t total_io_size, IOType io_type, IOPattern io_pattern) {
+               size_t block_size, IOType io_type, IOPattern io_pattern) {
+  CUfileError_t status = cuFileDriverOpen();
+  if (status.err != CU_FILE_SUCCESS) {
+    return;
+  }
   CUfileHandle_t fh;
   CUfileDescr_t params;
   memset(&params, 0, sizeof(params));
-  params.handle = filename.c_str();
-  params.type = CUfileDescrT::CUFILE_DESCRIPTOR_PATHNAME;
+  int fd = open64(filename.c_str(), O_RDWR | O_CREAT, 0666);
+  params.handle.fd = fd;
+  params.type = CU_FILE_HANDLE_TYPE_OPAQUE_FD;
 
-  CUfileError_t status = cuFileHandleRegister(&fh, &params);
-  if (status != CUFILE_SUCCESS) {
-    std::cerr << "cuFileHandleRegister error: " << status << std::endl;
+  status = cuFileHandleRegister(&fh, &params);
+  if (status.err != CU_FILE_SUCCESS) {
+    std::cerr << "cuFileHandleRegister error: " << status.err << std::endl;
     return;
   }
 
@@ -104,28 +111,27 @@ void cufile_io(const std::string& filename, size_t transfer_size,
 
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<size_t> distrib(0,
-                                                total_io_size - transfer_size);
+  std::uniform_int_distribution<size_t> distrib(0, block_size - transfer_size);
 
   if (io_type == IOType::WRITE) {
-    size_t num_transfers = total_io_size / transfer_size;
+    size_t num_transfers = block_size / transfer_size;
     for (size_t i = 0; i < num_transfers; ++i) {
       size_t offset =
           (io_pattern == IOPattern::RANDOM) ? distrib(gen) : i * transfer_size;
-      status = cuFileWrite(device_buffer, fh, transfer_size, offset, 0);
-      if (status != CUFILE_SUCCESS) {
-        std::cerr << "cuFileWrite error: " << status << std::endl;
+      ssize_t ret = cuFileWrite(device_buffer, fh, transfer_size, offset, 0);
+      if (ret < 0) {
+        std::cerr << "cuFileWrite error: " << ret << std::endl;
         break;
       }
     }
   } else {
-    size_t num_transfers = total_io_size / transfer_size;
+    size_t num_transfers = block_size / transfer_size;
     for (size_t i = 0; i < num_transfers; ++i) {
       size_t offset =
           (io_pattern == IOPattern::RANDOM) ? distrib(gen) : i * transfer_size;
-      status = cuFileRead(device_buffer, fh, transfer_size, offset, 0);
-      if (status != CUFILE_SUCCESS) {
-        std::cerr << "cuFileRead error: " << status << std::endl;
+      ssize_t ret = cuFileRead(device_buffer, fh, transfer_size, offset, 0);
+      if (ret < 0) {
+        std::cerr << "cuFileRead error: " << ret << std::endl;
         break;
       }
     }
@@ -147,7 +153,7 @@ int main(int argc, char* argv[]) {
     if (rank == 0) {
       std::cerr
           << "Usage: " << argv[0]
-          << " <transfer_size> <total_io_size> <io_pattern (random|sequential)>"
+          << " <transfer_size> <block_size> <io_pattern (random|sequential)>"
           << " <io_type (read|write)> <io_engine (posix|cufile)> <filename>"
           << std::endl;
     }
@@ -156,7 +162,7 @@ int main(int argc, char* argv[]) {
   }
 
   size_t transfer_size = std::stoull(argv[1]);
-  size_t total_io_size = std::stoull(argv[2]);
+  size_t block_size = std::stoull(argv[2]);
   std::string io_pattern_str = argv[3];
   std::string io_type_str = argv[4];
   std::string io_engine_str = argv[5];
@@ -210,11 +216,11 @@ int main(int argc, char* argv[]) {
 
   switch (io_engine) {
     case IOEngine::POSIX:
-      posix_io(filename, transfer_size, total_io_size, io_type, io_pattern);
+      posix_io(filename, transfer_size, block_size, io_type, io_pattern);
       break;
 #ifdef USE_CUFILE
     case IOEngine::CUFILE:
-      cufile_io(filename, transfer_size, total_io_size, io_type, io_pattern);
+      cufile_io(filename, transfer_size, block_size, io_type, io_pattern);
       break;
 #endif
   }
