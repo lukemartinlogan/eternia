@@ -19,7 +19,7 @@ struct CreateTaskParams {
   CLS_CONST char *lib_name_ = "eternia_eternia_core";
   IN int qcount_ = 1024;
   IN int qdepth_ = 64;
-  OUT hipc::FullPtr<EterniaMq> et_mq_;
+  OUT hipc::FullPtr<EterniaMq> et_mq_[MAX_GPU];
 
   HSHM_INLINE_CROSS_FUN
   CreateTaskParams() = default;

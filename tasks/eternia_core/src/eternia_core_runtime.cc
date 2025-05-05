@@ -59,6 +59,8 @@ class Server : public Module {
   CLS_CONST LaneGroupId kDefaultGroup = 0;
   FullPtr<ReorganizeTask> reorg_;
   Client client_;
+  size_t poll_block_ = 0;
+  size_t poll_thread_ = 0;
 
  public:
   Server() = default;
@@ -68,14 +70,31 @@ class Server : public Module {
   void Create(CreateTask *task, RunContext &rctx) {
     CreateTaskParams params = task->GetParams();
     CreateLaneGroup(kDefaultGroup, 1, QUEUE_LOW_LATENCY);
-    auto *et_mq =
-        hshm::GpuApi::Malloc<FullPtr<EterniaMq>>(sizeof(FullPtr<EterniaMq>));
-    InitEterniaRuntime<<<1, 1>>>(params.qcount_, params.qdepth_, et_mq);
     client_.Init(id_);
-    client_.et_mq_ = *et_mq;
-    hshm::GpuApi::Free(et_mq);
-    params.et_mq_ = client_.et_mq_;
+    // Initialize queues on each GPU
+    for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
+      hshm::GpuApi::SetDevice(gpu_id);
+      auto *et_mq =
+          hshm::GpuApi::Malloc<FullPtr<EterniaMq>>(sizeof(FullPtr<EterniaMq>));
+      InitEterniaRuntime<<<1, 1>>>(params.qcount_, params.qdepth_, et_mq);
+      hshm::GpuApi::Synchronize();
+      client_.et_mq_[gpu_id] = *et_mq;
+      hshm::GpuApi::Free(et_mq);
+    }
+    // Copy queues to CreateTaskParams
+    memcpy(params.et_mq_, client_.et_mq_,
+           sizeof(FullPtr<EterniaMq>) * CHI_CLIENT->ngpu_);
     task->SetParams(params);
+    // Get the dimensions of the polling function
+    poll_block_ = params.qcount_ / 1024;
+    poll_thread_ = params.qcount_ % 1024;
+    if (poll_block_ == 0) {
+      poll_block_ = 1;
+    }
+    if (poll_thread_ == 0) {
+      poll_thread_ = 1024;
+    }
+    // Begin polling the queues on this container
     reorg_ = client_.AsyncReorganize(HSHM_MCTX, DomainQuery::GetLocalHash(0));
   }
   void MonitorCreate(MonitorModeId mode, CreateTask *task, RunContext &rctx) {}
@@ -99,19 +118,16 @@ class Server : public Module {
   CHI_BEGIN(Reorganize)
   /** The Reorganize method */
   void Reorganize(ReorganizeTask *task, RunContext &rctx) {
-    FullPtr<EterniaMq> &et_mq = client_.et_mq_;
-    size_t total = et_mq->gpu_queues_.size();
-    size_t block = total / 1024;
-    size_t thread = total % 1024;
-    if (block == 0) {
-      block = 1;
+    for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
+      FullPtr<EterniaMq> &et_mq = client_.et_mq_[gpu_id];
+      hshm::GpuApi::SetDevice(gpu_id);
+      PollCpuQueue<<<1, 1>>>(et_mq.shm_);
+      PollGpuQueues<<<poll_block_, poll_thread_>>>(et_mq.shm_);
     }
-    if (thread == 0) {
-      thread = 1024;
+    for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
+      hshm::GpuApi::SetDevice(gpu_id);
+      hshm::GpuApi::Synchronize();
     }
-    PollCpuQueue<<<1, 1>>>(et_mq.shm_);
-    PollGpuQueues<<<block, thread>>>(et_mq.shm_);
-    hshm::GpuApi::Synchronize();
   }
   void MonitorReorganize(MonitorModeId mode, ReorganizeTask *task,
                          RunContext &rctx) {

@@ -13,6 +13,8 @@
 #ifndef CHI_eternia_core_H_
 #define CHI_eternia_core_H_
 
+#include <hermes_shm/constants/macros.h>
+
 #include "eternia_core_tasks.h"
 
 namespace eternia {
@@ -20,7 +22,7 @@ namespace eternia {
 /** Create eternia_core requests */
 class Client : public ModuleClient {
  public:
-  FullPtr<EterniaMq> et_mq_;
+  FullPtr<EterniaMq> et_mq_[MAX_GPU];
 
  public:
   /** Default constructor */
@@ -42,7 +44,7 @@ class Client : public ModuleClient {
     task->Wait();
     Init(task->ctx_.id_);
     CreateTaskParams params = task->GetParams();
-    et_mq_ = params.et_mq_;
+    memcpy(et_mq_, params.et_mq_, sizeof(FullPtr<EterniaMq>) * MAX_GPU);
     CHI_CLIENT->DelTask(mctx, task);
   }
   CHI_TASK_METHODS(Create);
@@ -73,5 +75,15 @@ class Client : public ModuleClient {
 };
 
 }  // namespace eternia
+
+#define ETERNIA_CLIENT hshm::Singleton<eternia::Client>::GetInstance()
+
+static inline void ETERNIA_INIT() {
+  HERMES_INIT();
+  ETERNIA_CLIENT->Create(
+      HSHM_MCTX,
+      chi::DomainQuery::GetDirectHash(chi::SubDomain::kGlobalContainers, 0),
+      chi::DomainQuery::GetGlobalBcast(), "eternia_core");
+}
 
 #endif  // CHI_eternia_core_H_
