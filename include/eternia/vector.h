@@ -40,10 +40,17 @@ struct Context {
 
 struct PageAllocator {
   size_t head_ = 0, tail_ = 0;
+  hipc::FullPtr<char> tcache_;
+  Context ctx_;
   Page pages_[MAX_TCACHE_SLOTS];
   Page *alloc_[MAX_TCACHE_SLOTS];
 
   PageAllocator() { memset(pages_, 0, sizeof(pages_)); }
+
+  void init(hipc::FullPtr<char> tcache, Context ctx) {
+    tcache_ = tcache;
+    ctx_ = ctx;
+  }
 
   HSHM_INLINE_CROSS_FUN
   Page *Allocate() {
@@ -51,7 +58,11 @@ struct PageAllocator {
       return nullptr;
     } else if (tail_ < MAX_TCACHE_SLOTS) {
       size_t tail = tail_++;
-      return &pages_[tail];
+      Page &page = pages_[tail];
+      page.size_ = ctx_.tcache_page_size_;
+      page.buf_ = tcache_.ptr_;
+      tcache_ += ctx_.tcache_size_;
+      return &page;
     } else {
       size_t tail = (tail_++) % MAX_TCACHE_SLOTS;
       return alloc_[tail];

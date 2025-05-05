@@ -63,7 +63,6 @@ struct Metadata {
   chi::Block block_;
   hipc::Pointer data_;
   int dev_id_;
-  hipc::SpinLock org_lock_;
   hipc::atomic<bool> taken_;
 };
 
