@@ -6,8 +6,9 @@
 #define CHI_TASKS_TASK_TEMPL_INCLUDE_eternia_core_eternia_core_TASKS_H_
 
 #include "chimaera/chimaera_namespace.h"
+#include "eternia/libgpu.h"
 
-namespace chi::eternia_core {
+namespace eternia {
 
 #include "eternia_core_methods.h"
 CHI_NAMESPACE_INIT
@@ -16,15 +17,24 @@ CHI_BEGIN(Create)
 /** A task to create eternia_core */
 struct CreateTaskParams {
   CLS_CONST char *lib_name_ = "eternia_eternia_core";
+  IN int qcount_ = 1024;
+  IN int qdepth_ = 64;
+  OUT hipc::FullPtr<EterniaMq> et_mq_;
 
   HSHM_INLINE_CROSS_FUN
   CreateTaskParams() = default;
 
   HSHM_INLINE_CROSS_FUN
-  CreateTaskParams(const hipc::CtxAllocator<CHI_ALLOC_T> &alloc) {}
+  CreateTaskParams(const hipc::CtxAllocator<CHI_ALLOC_T> &alloc,
+                   int qcount = 1024, int qdepth = 64) {
+    qcount_ = qcount;
+    qdepth_ = qdepth;
+  }
 
   template <typename Ar>
-  HSHM_INLINE_CROSS_FUN void serialize(Ar &ar) {}
+  HSHM_INLINE_CROSS_FUN void serialize(Ar &ar) {
+    ar(qcount_, qdepth_);
+  }
 };
 typedef chi::Admin::CreatePoolBaseTask<CreateTaskParams> CreateTask;
 CHI_END(Create)
@@ -74,6 +84,6 @@ CHI_END(Reorganize);
 
 CHI_AUTOGEN_METHODS  // keep at class bottom
 
-}  // namespace chi::eternia_core
+}  // namespace eternia
 
 #endif  // CHI_TASKS_TASK_TEMPL_INCLUDE_eternia_core_eternia_core_TASKS_H_

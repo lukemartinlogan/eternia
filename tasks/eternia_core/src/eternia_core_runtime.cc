@@ -10,27 +10,20 @@
  * have access to the file, you may request a copy from help@hdfgroup.org.   *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#include <hermes_shm/util/gpu_api.h>
+
 #include "chimaera/api/chimaera_runtime.h"
 #include "chimaera/monitor/monitor.h"
 #include "chimaera_admin/chimaera_admin_client.h"
 #include "eternia_core/eternia_core_client.h"
+#include "eternia_core/eternia_core_tasks.h"
 
-namespace chi::eternia_core {
-
-struct MemTask {};
-
-struct EterniaMq {
-  chi::data::ipc::vector<chi::data::ipc::mpsc_queue<MemTask>> gpu_queues_;
-  chi::ipc::mpsc_queue<MemTask> cpu_queue_;
-
-  EterniaMq(int count, int depth)
-      : gpu_queues_(count, depth), cpu_queue_(depth) {}
-};
+namespace eternia {
 
 HSHM_GPU_KERNEL void InitEterniaRuntime(int qcount, int qdepth,
-                                        FullPtr<EterniaMq> *et) {
+                                        FullPtr<EterniaMq> *et_mq) {
   hipc::ScopedTlsAllocator<CHI_DATA_ALLOC_T> tls(CHI_CLIENT->data_alloc_);
-  *et = tls.alloc_->NewObjLocal<EterniaMq>(tls.alloc_.ctx_, qcount, qdepth);
+  *et_mq = tls.alloc_->NewObjLocal<EterniaMq>(tls.alloc_.ctx_, qcount, qdepth);
 }
 
 template <typename QueueT>
@@ -45,19 +38,27 @@ HSHM_GPU_FUN void PollEterniaQueue(QueueT &queue) {
   }
 }
 
-HSHM_GPU_KERNEL void EterniaRuntime(EterniaMq mq) {
+HSHM_GPU_KERNEL void PollCpuQueue(hipc::Pointer mq_p) {
+  hipc::FullPtr<EterniaMq> mq(mq_p);
   size_t tid = hshm::GpuApi::GetGlobalThreadId();
   if (tid == 0) {
-    PollEterniaQueue(mq.cpu_queue_);
-  } else {
-    tid -= 1;
-    PollEterniaQueue(mq.gpu_queues_[tid]);
+    PollEterniaQueue(mq->cpu_queue_);
+  }
+}
+
+HSHM_GPU_KERNEL void PollGpuQueues(hipc::Pointer mq_p) {
+  hipc::FullPtr<EterniaMq> mq(mq_p);
+  size_t tid = hshm::GpuApi::GetGlobalThreadId();
+  if (tid < mq->gpu_queues_.size()) {
+    PollEterniaQueue(mq->gpu_queues_[tid]);
   }
 }
 
 class Server : public Module {
  public:
   CLS_CONST LaneGroupId kDefaultGroup = 0;
+  FullPtr<ReorganizeTask> reorg_;
+  Client client_;
 
  public:
   Server() = default;
@@ -65,8 +66,17 @@ class Server : public Module {
   CHI_BEGIN(Create)
   /** Construct eternia_core */
   void Create(CreateTask *task, RunContext &rctx) {
-    // Create a set of lanes for holding tasks
+    CreateTaskParams params = task->GetParams();
     CreateLaneGroup(kDefaultGroup, 1, QUEUE_LOW_LATENCY);
+    auto *et_mq =
+        hshm::GpuApi::Malloc<FullPtr<EterniaMq>>(sizeof(FullPtr<EterniaMq>));
+    InitEterniaRuntime<<<1, 1>>>(params.qcount_, params.qdepth_, et_mq);
+    client_.Init(id_);
+    client_.et_mq_ = *et_mq;
+    hshm::GpuApi::Free(et_mq);
+    params.et_mq_ = client_.et_mq_;
+    task->SetParams(params);
+    reorg_ = client_.AsyncReorganize(HSHM_MCTX, DomainQuery::GetLocalHash(0));
   }
   void MonitorCreate(MonitorModeId mode, CreateTask *task, RunContext &rctx) {}
   CHI_END(Create)
@@ -88,7 +98,21 @@ class Server : public Module {
 
   CHI_BEGIN(Reorganize)
   /** The Reorganize method */
-  void Reorganize(ReorganizeTask *task, RunContext &rctx) {}
+  void Reorganize(ReorganizeTask *task, RunContext &rctx) {
+    FullPtr<EterniaMq> &et_mq = client_.et_mq_;
+    size_t total = et_mq->gpu_queues_.size();
+    size_t block = total / 1024;
+    size_t thread = total % 1024;
+    if (block == 0) {
+      block = 1;
+    }
+    if (thread == 0) {
+      thread = 1024;
+    }
+    PollCpuQueue<<<1, 1>>>(et_mq.shm_);
+    PollGpuQueues<<<block, thread>>>(et_mq.shm_);
+    hshm::GpuApi::Synchronize();
+  }
   void MonitorReorganize(MonitorModeId mode, ReorganizeTask *task,
                          RunContext &rctx) {
     switch (mode) {
@@ -104,6 +128,6 @@ class Server : public Module {
 #include "eternia_core/eternia_core_lib_exec.h"
 };
 
-}  // namespace chi::eternia_core
+}  // namespace eternia
 
-CHI_TASK_CC(chi::eternia_core::Server, "eternia_core");
+CHI_TASK_CC(eternia::Server, "eternia_core");

@@ -15,10 +15,13 @@
 
 #include "eternia_core_tasks.h"
 
-namespace chi::eternia_core {
+namespace eternia {
 
 /** Create eternia_core requests */
 class Client : public ModuleClient {
+ public:
+  FullPtr<EterniaMq> et_mq_;
+
  public:
   /** Default constructor */
   HSHM_INLINE_CROSS_FUN
@@ -38,6 +41,8 @@ class Client : public ModuleClient {
         AsyncCreate(mctx, dom_query, affinity, pool_name, ctx);
     task->Wait();
     Init(task->ctx_.id_);
+    CreateTaskParams params = task->GetParams();
+    et_mq_ = params.et_mq_;
     CHI_CLIENT->DelTask(mctx, task);
   }
   CHI_TASK_METHODS(Create);
@@ -54,12 +59,10 @@ class Client : public ModuleClient {
   CHI_TASK_METHODS(Destroy)
   CHI_END(Destroy)
 
-CHI_BEGIN(Reorganize)
+  CHI_BEGIN(Reorganize)
   /** Reorganize task */
-  void Reorganize(const hipc::MemContext &mctx,
-                      const DomainQuery &dom_query) {
-    FullPtr<ReorganizeTask> task =
-      AsyncReorganize(mctx, dom_query);
+  void Reorganize(const hipc::MemContext &mctx, const DomainQuery &dom_query) {
+    FullPtr<ReorganizeTask> task = AsyncReorganize(mctx, dom_query);
     task->Wait();
     CHI_CLIENT->DelTask(mctx, task);
   }
@@ -69,6 +72,6 @@ CHI_BEGIN(Reorganize)
   CHI_AUTOGEN_METHODS  // keep at class bottom
 };
 
-}  // namespace chi::eternia_core
+}  // namespace eternia
 
 #endif  // CHI_eternia_core_H_

@@ -14,6 +14,14 @@ struct MemTask {
   u32 page_size_;
 };
 
+struct EterniaMq {
+  chi::data::ipc::vector<chi::data::ipc::mpsc_queue<MemTask>> gpu_queues_;
+  chi::ipc::mpsc_queue<MemTask> cpu_queue_;
+
+  EterniaMq(int count, int depth)
+      : gpu_queues_(count, depth), cpu_queue_(depth) {}
+};
+
 struct ChunkId {
   hermes::TagId tag_id_;
   size_t page_id_;
@@ -92,7 +100,7 @@ class GpuCache {
   }
 
   HSHM_GPU_FUN
-  bool Find(const MemTask &mem_task, Metadata *&data) {}
+  bool Find(const MemTask &mem_task, Metadata *&data) { return false; }
 
   template <typename T>
   void Emplace(const hermes::Bucket &bkt) {}

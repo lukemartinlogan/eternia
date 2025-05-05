@@ -108,8 +108,6 @@ if(CHIMAERA_ENABLE_ROCM)
     hshm_enable_rocm("HIP" 17)
 endif()
 
-add_subdirectory(tasks)
-
 # ------------------------------------------------------------------------------
 # Setup CMake Environment
 # ------------------------------------------------------------------------------
@@ -130,6 +128,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_subdirectory(src)
 add_subdirectory(benchmark)
+add_subdirectory(tasks)
 
 # -----------------------------------------------------------------------------
 # Install Hermes Headers
