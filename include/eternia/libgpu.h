@@ -4,7 +4,7 @@
 
 namespace eternia {
 
-enum class IoOp { kRead, kWrite, kAppend };
+enum class IoOp { kRead, kWrite, kAppend, kEvict };
 
 struct MemTask {
   hermes::TagId tag_id_;

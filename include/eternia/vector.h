@@ -155,23 +155,39 @@ class Vector {
   void Destroy() { gpu_alloc_->Free(HSHM_MCTX, tcache_); }
 
   HSHM_INLINE_GPU_FUN
-  bool FindPage(size_t off, T &val) {
+  bool FindValInTcache(size_t off, T *&val) {
     PageId page_id(off, ctx_.tcache_page_size_);
-    // Check the last pointer
-    if (last_page_ && last_page_->id_ == page_id.id_) {
-      val = last_page_[page_id.id_];
-      return true;
-    }
-    // Check the hash pointer
-    last_page_ = page_map_.Find(page_id);
-    if (last_page_) {
-      val = last_page_[page_id.id_];
-      return true;
-    }
-    // Page DNE
+    last_page_ = FindPageInTcache(off, page_id);
+    val = GetValFromPage(page_id);
     return false;
   }
 
+  HSHM_INLINE_GPU_FUN
+  bool FindPageInTcache(size_t off, Page *&page) {
+    PageId page_id(off, ctx_.tcache_page_size_);
+    return FindPageInTcache(off, page, page_id);
+  }
+
+  HSHM_INLINE_GPU_FUN
+  bool FindPageInTcache(size_t off, Page *&page, const PageId &page_id) {
+    // Check the last pointer
+    if (last_page_ && last_page_->id_ == page_id.id_) {
+      return true;
+    }
+    // Check the hash pointer
+    page = page_map_.Find(page_id);
+    return page != nullptr;
+  }
+
+ private:
+  T *GetValFromPage(const PageId &page_id) {
+    if (last_page_) {
+      return ((T *)last_page_->buf_)[page_id.off_];
+    }
+    return nullptr;
+  }
+
+ public:
   HSHM_INLINE_GPU_FUN
   Page *AllocatePage(size_t off) {
     PageId page_id(off, ctx_.tcache_page_size_);
@@ -191,6 +207,9 @@ class Vector {
       last_page_ = nullptr;
     }
   }
+
+  HSHM_INLINE_GPU_FUN
+  void PrefetchPage(size_t off) {}
 };
 
 template <typename T>
