@@ -250,8 +250,11 @@ int main(int argc, char* argv[]) {
     double average_duration = static_cast<double>(total_duration) / nprocs;
     double bandwidth =
         static_cast<double>(block_size) / (average_duration / 1000.0);
-    HILOG(kInfo, "IoBench done in: nprocs={} time={}ms io={}bytes", nprocs,
-          average_duration, block_size * nprocs);
+    HILOG(kInfo,
+          "IoBench done in: api={} pattern={} io_type={} nprocs={} time={}ms "
+          "io_size={}bytes",
+          io_engine_str, io_pattern_str, io_type_str, nprocs, average_duration,
+          block_size * nprocs);
   }
 
   MPI_Finalize();
