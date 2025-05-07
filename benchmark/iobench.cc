@@ -156,9 +156,9 @@ void cufile_io(const std::string& filename, size_t transfer_size,
 int main(int argc, char* argv[]) {
   MPI_Init(&argc, &argv);
 
-  int rank, size;
+  int rank, nprocs;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
   if (argc != 7) {
     if (rank == 0) {
@@ -247,9 +247,11 @@ int main(int argc, char* argv[]) {
              MPI_COMM_WORLD);
 
   if (rank == 0) {
-    double average_duration = static_cast<double>(total_duration) / size;
-    std::cout << "I/O benchmark completed in " << average_duration << " ms"
-              << std::endl;
+    double average_duration = static_cast<double>(total_duration) / nprocs;
+    double bandwidth =
+        static_cast<double>(block_size) / (average_duration / 1000.0);
+    HILOG(kInfo, "IoBench done in: nprocs={} time={}ms io={}bytes", nprocs,
+          average_duration, block_size * nprocs);
   }
 
   MPI_Finalize();
