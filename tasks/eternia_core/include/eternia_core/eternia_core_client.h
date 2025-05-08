@@ -22,7 +22,7 @@ namespace eternia {
 /** Create eternia_core requests */
 class Client : public ModuleClient {
  public:
-  FullPtr<EterniaMq> et_mq_[MAX_GPU];
+  FullPtr<GpuCache> gcache_[MAX_GPU];
 
  public:
   /** Default constructor */
@@ -44,7 +44,7 @@ class Client : public ModuleClient {
     task->Wait();
     Init(task->ctx_.id_);
     CreateTaskParams params = task->GetParams();
-    memcpy(et_mq_, params.et_mq_, sizeof(FullPtr<EterniaMq>) * MAX_GPU);
+    memcpy(gcache_, params.gcache_, sizeof(FullPtr<GpuCache>) * MAX_GPU);
     CHI_CLIENT->DelTask(mctx, task);
   }
   CHI_TASK_METHODS(Create);

@@ -14,14 +14,6 @@ struct MemTask {
   u32 page_size_;
 };
 
-struct EterniaMq {
-  chi::data::ipc::vector<chi::data::ipc::mpsc_queue<MemTask>> gpu_queues_;
-  chi::ipc::mpsc_queue<MemTask> cpu_queue_;
-
-  EterniaMq(int count, int depth)
-      : gpu_queues_(count, depth), cpu_queue_(depth) {}
-};
-
 struct ChunkId {
   hermes::TagId tag_id_;
   size_t page_id_;
@@ -74,28 +66,27 @@ struct Metadata {
   hipc::atomic<bool> taken_;
 };
 
-struct GpuCacheAllocHdr {
-  hermes::Client mdm_;
-  hipc::delay_ar<chi::ipc::vector<Metadata>> md_cache_;
-};
-
 class GpuCache {
  public:
+  chi::data::ipc::vector<chi::data::ipc::mpsc_queue<MemTask>> gpu_queues_;
+  chi::ipc::mpsc_queue<MemTask> cpu_queue_;
+  chi::ipc::vector<Metadata> md_cache_;
   hermes::Client mdm_;
-  chi::ipc::vector<Metadata> *md_cache_;
 
  public:
-  HSHM_GPU_FUN
-  void shm_init(hermes::Client mdm) { mdm_ = mdm; }
+  GpuCache(int count, int depth, hermes::Client mdm)
+      : gpu_queues_(count, depth),
+        cpu_queue_(depth),
+        md_cache_(count * depth),
+        mdm_(mdm) {}
 
-  HSHM_GPU_FUN
-  void shm_deserialize() {}
-
-  HSHM_GPU_FUN void Io(const MemTask &mem_task) {
+ public:
+  template <bool IsTcache>
+  HSHM_GPU_FUN void ProcessMemTask(const MemTask &mem_task) {
     Metadata *md;
     if (Find(mem_task, md)) {
     } else {
-      hermes::Bucket bkt(mem_task.tag_id_, mdm_);
+      // hermes::Bucket bkt(mem_task.tag_id_, mdm_);
     }
   }
 

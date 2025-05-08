@@ -19,7 +19,8 @@ struct CreateTaskParams {
   CLS_CONST char *lib_name_ = "eternia_eternia_core";
   IN int qcount_ = 1024;
   IN int qdepth_ = 64;
-  OUT hipc::FullPtr<EterniaMq> et_mq_[MAX_GPU];
+  IN hermes::Client hermes_;
+  OUT hipc::FullPtr<GpuCache> gcache_[MAX_GPU];
 
   HSHM_INLINE_CROSS_FUN
   CreateTaskParams() = default;
@@ -27,13 +28,14 @@ struct CreateTaskParams {
   HSHM_INLINE_CROSS_FUN
   CreateTaskParams(const hipc::CtxAllocator<CHI_ALLOC_T> &alloc,
                    int qcount = 1024, int qdepth = 64) {
+    hermes_.Init(HERMES_CONF->mdm_.pool_id_);
     qcount_ = qcount;
     qdepth_ = qdepth;
   }
 
   template <typename Ar>
   HSHM_INLINE_CROSS_FUN void serialize(Ar &ar) {
-    ar(qcount_, qdepth_);
+    ar(hermes_, qcount_, qdepth_);
   }
 };
 typedef chi::Admin::CreatePoolBaseTask<CreateTaskParams> CreateTask;

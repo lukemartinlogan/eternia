@@ -10,47 +10,51 @@
  * have access to the file, you may request a copy from help@hdfgroup.org.   *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#include <chimaera/api/chimaera_runtime.h>
+#include <chimaera/monitor/monitor.h>
+#include <chimaera_admin/chimaera_admin_client.h>
+#include <hermes/hermes.h>
 #include <hermes_shm/util/gpu_api.h>
 
-#include "chimaera/api/chimaera_runtime.h"
-#include "chimaera/monitor/monitor.h"
-#include "chimaera_admin/chimaera_admin_client.h"
 #include "eternia_core/eternia_core_client.h"
 #include "eternia_core/eternia_core_tasks.h"
 
 namespace eternia {
 
 HSHM_GPU_KERNEL void InitEterniaRuntime(int qcount, int qdepth,
-                                        FullPtr<EterniaMq> *et_mq) {
+                                        FullPtr<GpuCache> *gcache,
+                                        hermes::Client client) {
   hipc::ScopedTlsAllocator<CHI_DATA_ALLOC_T> tls(CHI_CLIENT->data_alloc_);
-  *et_mq = tls.alloc_->NewObjLocal<EterniaMq>(tls.alloc_.ctx_, qcount, qdepth);
+  *gcache = tls.alloc_->NewObjLocal<GpuCache>(tls.alloc_.ctx_, qcount, qdepth,
+                                              client);
 }
 
 template <typename QueueT>
-HSHM_GPU_FUN void PollEterniaQueue(QueueT &queue) {
+HSHM_GPU_FUN void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
+                                   QueueT &queue) {
   size_t count = queue.size();
   for (size_t i = 0; i < count; ++i) {
     MemTask task;
     if (queue.pop(task).IsNull()) {
       break;
     }
-    // Process the task
+    gcache->ProcessMemTask<false>(task);
   }
 }
 
-HSHM_GPU_KERNEL void PollCpuQueue(hipc::Pointer mq_p) {
-  hipc::FullPtr<EterniaMq> mq(mq_p);
+HSHM_GPU_KERNEL void PollCpuQueue(hipc::Pointer gcache_p) {
+  hipc::FullPtr<GpuCache> gcache(gcache_p);
   size_t tid = hshm::GpuApi::GetGlobalThreadId();
   if (tid == 0) {
-    PollEterniaQueue(mq->cpu_queue_);
+    PollEterniaQueue(gcache, gcache->cpu_queue_);
   }
 }
 
-HSHM_GPU_KERNEL void PollGpuQueues(hipc::Pointer mq_p) {
-  hipc::FullPtr<EterniaMq> mq(mq_p);
+HSHM_GPU_KERNEL void PollGpuQueues(hipc::Pointer gcache_p) {
+  hipc::FullPtr<GpuCache> gcache(gcache_p);
   size_t tid = hshm::GpuApi::GetGlobalThreadId();
-  if (tid < mq->gpu_queues_.size()) {
-    PollEterniaQueue(mq->gpu_queues_[tid]);
+  if (tid < gcache->gpu_queues_.size()) {
+    PollEterniaQueue(gcache, gcache->gpu_queues_[tid]);
   }
 }
 
@@ -74,16 +78,17 @@ class Server : public Module {
     // Initialize queues on each GPU
     for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
       hshm::GpuApi::SetDevice(gpu_id);
-      auto *et_mq =
-          hshm::GpuApi::Malloc<FullPtr<EterniaMq>>(sizeof(FullPtr<EterniaMq>));
-      InitEterniaRuntime<<<1, 1>>>(params.qcount_, params.qdepth_, et_mq);
+      auto *gcache =
+          hshm::GpuApi::Malloc<FullPtr<GpuCache>>(sizeof(FullPtr<GpuCache>));
+      InitEterniaRuntime<<<1, 1>>>(params.qcount_, params.qdepth_, gcache,
+                                   params.hermes_);
       hshm::GpuApi::Synchronize();
-      client_.et_mq_[gpu_id] = *et_mq;
-      hshm::GpuApi::Free(et_mq);
+      client_.gcache_[gpu_id] = *gcache;
+      hshm::GpuApi::Free(gcache);
     }
     // Copy queues to CreateTaskParams
-    memcpy(params.et_mq_, client_.et_mq_,
-           sizeof(FullPtr<EterniaMq>) * CHI_CLIENT->ngpu_);
+    memcpy(params.gcache_, client_.gcache_,
+           sizeof(FullPtr<GpuCache>) * CHI_CLIENT->ngpu_);
     task->SetParams(params);
     // Get the dimensions of the polling function
     poll_block_ = params.qcount_ / 1024;
@@ -119,10 +124,10 @@ class Server : public Module {
   /** The Reorganize method */
   void Reorganize(ReorganizeTask *task, RunContext &rctx) {
     for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
-      FullPtr<EterniaMq> &et_mq = client_.et_mq_[gpu_id];
+      FullPtr<GpuCache> &gcache = client_.gcache_[gpu_id];
       hshm::GpuApi::SetDevice(gpu_id);
-      PollCpuQueue<<<1, 1>>>(et_mq.shm_);
-      PollGpuQueues<<<poll_block_, poll_thread_>>>(et_mq.shm_);
+      PollCpuQueue<<<1, 1>>>(gcache.shm_);
+      PollGpuQueues<<<poll_block_, poll_thread_>>>(gcache.shm_);
     }
     for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
       hshm::GpuApi::SetDevice(gpu_id);
