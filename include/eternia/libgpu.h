@@ -14,6 +14,33 @@ struct MemTask {
   u32 page_size_;
 };
 
+template <typename T, size_t DEPTH>
+struct PageAllocator {
+  size_t head_ = 0, tail_ = 0;
+  T pages_[DEPTH];
+  T *alloc_[DEPTH];
+  PageAllocator() { memset(pages_, 0, sizeof(pages_)); }
+
+  HSHM_INLINE_CROSS_FUN
+  T *Allocate() {
+    if (tail_ - head_ >= DEPTH) {
+      return nullptr;
+    } else if (tail_ < DEPTH) {
+      size_t tail = tail_++;
+      return pages_[tail];
+    } else {
+      size_t tail = (tail_++) % DEPTH;
+      return alloc_[tail];
+    }
+  }
+
+  HSHM_INLINE_CROSS_FUN
+  void Free(T *page) {
+    size_t head = (head_++) % DEPTH;
+    alloc_[head] = page;
+  }
+};
+
 struct ChunkId {
   hermes::TagId tag_id_;
   size_t page_id_;
@@ -82,9 +109,9 @@ class GpuCache {
 
  public:
   template <bool IsTcache>
-  HSHM_GPU_FUN void ProcessMemTask(const MemTask &mem_task) {
+  HSHM_GPU_FUN void ProcessMemTask(MemTask *mem_task) {
     Metadata *md;
-    if (Find(mem_task, md)) {
+    if (Find(*mem_task, md)) {
     } else {
       // hermes::Bucket bkt(mem_task.tag_id_, mdm_);
     }
