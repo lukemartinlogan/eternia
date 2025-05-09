@@ -6,14 +6,8 @@
 
 namespace eternia {
 
-#define MAX_TCACHE_SLOTS 32
-
-struct Page {
-  char *buf_;
-  size_t size_;
-  size_t id_;
-  Page *next_;
-};
+#define DEFAULT_TCACHE_PAGE_SIZE 4096
+#define DEFAULT_TCACHE_SLOTS 32
 
 template <size_t SIZE>
 struct StaticPage {
@@ -23,44 +17,54 @@ struct StaticPage {
   StaticPage *next_;
 };
 
-struct PageId {
-  size_t id_;
-  size_t off_;
-
-  HSHM_INLINE_CROSS_FUN
-  PageId(size_t off, size_t page_size) {
-    id_ = off / page_size;
-    off_ = off % page_size;
-  }
-
-  HSHM_INLINE_CROSS_FUN
-  size_t Hash() const {
-    size_t hash = 5381;
-    hash = ((hash << 5) + hash) + id_; /* hash * 33 + c */
-    return hash;
-  }
-};
-
 struct Context {
   size_t gcache_page_size_ = MEGABYTES(1);
 };
 
+template <typename Page, size_t DEPTH>
+struct PageAllocator {
+  size_t head_ = 0, tail_ = 0;
+  Page pages_[DEPTH];
+  Page *alloc_[DEPTH];
+  PageAllocator() { memset(pages_, 0, sizeof(pages_)); }
+
+  HSHM_INLINE_CROSS_FUN
+  Page *Allocate() {
+    if (tail_ - head_ >= DEPTH) {
+      return nullptr;
+    } else if (tail_ < DEPTH) {
+      size_t tail = tail_++;
+      return pages_[tail];
+    } else {
+      size_t tail = (tail_++) % DEPTH;
+      return alloc_[tail];
+    }
+  }
+
+  HSHM_INLINE_CROSS_FUN
+  void Free(Page *page) {
+    size_t head = (head_++) % DEPTH;
+    alloc_[head] = page;
+  }
+};
+
+template <typename Page, size_t DEPTH>
 struct PageMap {
-  Page *bkts_[MAX_TCACHE_SLOTS];
+  Page *bkts_[DEPTH];
 
   PageMap() { memset(bkts_, 0, sizeof(bkts_)); }
 
   HSHM_INLINE_CROSS_FUN
   void Emplace(const PageId &page_id, Page *page) {
-    size_t bkt_id = page_id.Hash() % MAX_TCACHE_SLOTS;
+    size_t bkt_id = page_id.Hash() % DEPTH;
     Page *bkt = bkts_[bkt_id];
     page->next_ = bkt;
-    bkts_[page_id.Hash() % MAX_TCACHE_SLOTS] = page;
+    bkts_[page_id.Hash() % DEPTH] = page;
   }
 
   HSHM_INLINE_CROSS_FUN
   Page *Find(const PageId &page_id) {
-    size_t bkt_id = page_id.Hash() % MAX_TCACHE_SLOTS;
+    size_t bkt_id = page_id.Hash() % DEPTH;
     Page *bkt = bkts_[bkt_id];
     while (bkt) {
       if (bkt->id_ == page_id.id_) {
@@ -73,14 +77,14 @@ struct PageMap {
 
   HSHM_INLINE_CROSS_FUN
   Page *Remove(const PageId &page_id) {
-    size_t bkt_id = page_id.Hash() % MAX_TCACHE_SLOTS;
+    size_t bkt_id = page_id.Hash() % DEPTH;
     Page *bkt = bkts_[bkt_id];
     if (bkt == nullptr) {
       return nullptr;
     }
 
     if (bkt->id_ == page_id.id_) {
-      bkts_[page_id.Hash() % MAX_TCACHE_SLOTS] = bkt->next_;
+      bkts_[page_id.Hash() % DEPTH] = bkt->next_;
       bkt->next_ = nullptr;
       return bkt;
     }
@@ -100,15 +104,18 @@ struct PageMap {
   }
 };
 
-template <typename T, size_t PAGE_SIZE = 4096,
-          size_t PAGE_SLOTS = MAX_TCACHE_SLOTS>
+template <typename T, size_t TCACHE_PAGE_SIZE = DEFAULT_TCACHE_PAGE_SIZE,
+          size_t TCACHE_PAGE_SLOTS = DEFAULT_TCACHE_SLOTS>
 class Vector {
+ public:
+  typedef StaticPage<TCACHE_PAGE_SIZE> Page;
+
  public:
   hermes::Bucket bkt_;
   Context ctx_;
   CHI_DATA_GPU_ALLOC_T *gpu_alloc_;
-  PageAllocator<StaticPage<PAGE_SIZE>, PAGE_SLOTS> page_alloc_;
-  PageMap page_map_;
+  PageAllocator<Page, TCACHE_PAGE_SLOTS> page_alloc_;
+  PageMap<Page, TCACHE_PAGE_SLOTS> page_map_;
   Page *last_page_;
   hipc::FullPtr<GpuCache> gcache_;
 
@@ -131,7 +138,7 @@ class Vector {
    */
   HSHM_INLINE_GPU_FUN
   bool FindValInTcache(size_t off, T *&val) {
-    PageId page_id(off * sizeof(T), PAGE_SIZE);
+    PageId page_id(off * sizeof(T), TCACHE_PAGE_SIZE);
     last_page_ = FindPageInTcache(off, page_id);
     val = GetValFromPage(page_id);
     return false;
@@ -144,7 +151,7 @@ class Vector {
    */
   HSHM_INLINE_GPU_FUN
   bool FindPageInTcache(size_t off, Page *&page) {
-    PageId page_id(off * sizeof(T), PAGE_SIZE);
+    PageId page_id(off * sizeof(T), TCACHE_PAGE_SIZE);
     return FindPageInTcache(off, page, page_id);
   }
 
@@ -199,12 +206,12 @@ class Vector {
   void PrefetchPage(size_t off) {}
 };
 
-template <typename T, size_t PAGE_SIZE = 4096,
-          size_t PAGE_SLOTS = MAX_TCACHE_SLOTS>
+template <typename T, size_t TCACHE_PAGE_SIZE = DEFAULT_TCACHE_PAGE_SIZE,
+          size_t TCACHE_PAGE_SLOTS = DEFAULT_TCACHE_SLOTS>
 class VectorSet {
  public:
   hermes::Bucket bkt_;
-  Vector<T, PAGE_SIZE, PAGE_SLOTS> gpus_[MAX_GPU];
+  Vector<T, TCACHE_PAGE_SIZE, TCACHE_PAGE_SLOTS> gpus_[MAX_GPU];
 
  public:
   VectorSet(const std::string &url, const Context &ctx = Context()) {

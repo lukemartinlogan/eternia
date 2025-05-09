@@ -38,7 +38,7 @@ HSHM_GPU_FUN void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
     if (queue.pop(task).IsNull()) {
       break;
     }
-    gcache->ProcessMemTask<false>(&task);
+    gcache->ProcessMemTask(&task);
   }
 }
 
