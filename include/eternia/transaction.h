@@ -6,10 +6,15 @@
 
 namespace eternia {
 
-class Transaction {
-  HSHM_GPU_FUN
-  Transaction() = default;
+#define ET_READ BIT_OPT(u32, 0)
+#define ET_WRITE BIT_OPT(u32, 1)
+#define ET_RW BIT_OPT(u32, 2)
 
+typedef u32 IoFlags;
+
+class Transaction {
+ public:
+  HSHM_GPU_FUN Transaction() = default;
   HSHM_GPU_FUN ~Transaction() = default;
 
   template <typename TxT>

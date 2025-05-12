@@ -2,9 +2,9 @@
 #define ETERNIA_VECTOR_H
 
 #include <hermes/hermes.h>
+#include <hermes_shm/constants/macros.h>
 
-#include "eternia/eternia_core_client.h"
-#include "hermes_shm/constants/macros.h"
+#include "eternia_core/eternia_core_client.h"
 #include "libgpu.h"
 
 namespace eternia {
@@ -115,6 +115,7 @@ template <typename T, size_t TCACHE_PAGE_SIZE = DEFAULT_TCACHE_PAGE_SIZE,
           size_t TCACHE_PAGE_SLOTS = DEFAULT_TCACHE_SLOTS>
 class Vector {
  public:
+  typedef T Type;
   typedef StaticPage<TCACHE_PAGE_SIZE> Page;
 
  public:
@@ -126,6 +127,7 @@ class Vector {
   Page *last_page_;
   hipc::FullPtr<GpuCache> gcache_;
   size_t page_bnds_ = 0;  // A counter for number of page boundaries crossed
+  size_t size_ = 0;       // Size of the vector
 
  public:
   /** Default constructor */
@@ -143,9 +145,6 @@ class Vector {
     gcache_ = ETERNIA_CLIENT->gcache_[gpu_id];
     last_page_ = nullptr;
   }
-
-  /** Destroy vector */
-  void Destroy() {}
 
   /** Locally rescore a tcache page */
   HSHM_INLINE_GPU_FUN

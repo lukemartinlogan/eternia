@@ -1,11 +1,12 @@
+#include <eternia/transactions/sequential.h>
 #include <eternia/vector.h>
 
-__global__ void vectorAdd(et::Vector<float> v[3], int N, et::Comm grid) {
-  int size = (N / grid.x);
-  int off = threadIdx.x * size;
-  et::SeqTx a(v[0], off, size, ET_RONLY);
-  et::SeqTx b(v[1], off, size, ET_RONLY);
-  et::SeqTx c(v[2], off, size, ET_WONLY);
+__global__ void vectorAdd(et::Vector<float> v[3], size_t N, size_t x) {
+  size_t size = (N / x);
+  size_t off = threadIdx.x * size;
+  et::SeqTx a(v[0], off, size, ET_READ);
+  et::SeqTx b(v[1], off, size, ET_READ);
+  et::SeqTx c(v[2], off, size, ET_WRITE);
   for (int i = 0; i < size; ++i) {
     c[i] = a[i] + b[i];
   }

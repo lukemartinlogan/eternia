@@ -1,11 +1,11 @@
 add_cuda_executable(tensor FALSE tensor.cc)
 target_link_libraries(tensor PUBLIC hshm::cudacxx)
 
-add_cuda_executable(iobench TRUE iobench.cc)
+add_cuda_executable(iobench FALSE iobench.cc)
 target_link_libraries(iobench PUBLIC hshm::cudacxx MPI::MPI_CXX cufile)
 
-add_cuda_executable(et_tensor TRUE et_tensor.cc)
-target_link_libraries(et_tensor PUBLIC hermes::hermes_core_client_gpu eternia_eternia_core MPI::MPI_CXX)
+add_cuda_executable(et_tensor FALSE et_tensor.cc)
+target_link_libraries(et_tensor PUBLIC eternia_eternia_core_client_gpu MPI::MPI_CXX)
 install(TARGETS
     tensor
     iobench
