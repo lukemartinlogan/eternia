@@ -2,21 +2,45 @@
 
 #include "hermes_shm/constants/macros.h"
 
+#define GCACHE_MIN_SCORE 0.8
+
 namespace eternia {
 
-enum class GcacheOp { kRescore, kFault, kEvict };
+enum class GcacheOp { kRescore, kFault, kFlush, kEvict };
 
-struct PageId {
+struct PageRegion {
   size_t id_;
   size_t off_;
+  size_t size_;
+  size_t page_size_;
+  bool modified_;
 
   HSHM_INLINE_CROSS_FUN
-  PageId() {}
+  PageRegion() {}
 
   HSHM_INLINE_CROSS_FUN
-  PageId(size_t off, size_t page_size) {
+  PageRegion(size_t off, size_t page_size) {
     id_ = off / page_size;
     off_ = off % page_size;
+    size_ = page_size - off_;
+    page_size_ = page_size;
+  }
+
+  HSHM_INLINE_CROSS_FUN
+  PageRegion(size_t off, size_t size, size_t page_size, bool modified = false) {
+    id_ = off / page_size;
+    off_ = off % page_size;
+    size_ = size;
+    page_size_ = page_size;
+    modified_ = modified;
+  }
+
+  HSHM_INLINE_CROSS_FUN
+  size_t ToIndex() const { return id_ * page_size_ + off_; }
+
+  HSHM_INLINE_CROSS_FUN
+  PageRegion ChangePageSize(size_t new_size) const {
+    return PageRegion(ToIndex(), size_, new_size, modified_);
   }
 
   HSHM_INLINE_CROSS_FUN
@@ -30,12 +54,10 @@ struct PageId {
 struct MemTask {
   hermes::TagId tag_id_;
   GcacheOp op_;
-  PageId page_id_;  // page id
-  u32 size_;        // size in bytes
-  u32 page_size_;   // size of pages
+  PageRegion region_;
+  float score_;
 
-  HSHM_INLINE_CROSS_FUN
-  size_t Hash() const { return Hash1(); }
+  HSHM_INLINE_CROSS_FUN size_t Hash() const { return Hash1(); }
 
   HSHM_INLINE_CROSS_FUN
   size_t Hash1() const {
@@ -44,7 +66,7 @@ struct MemTask {
     hash += tag_id_.unique_;
     hash += (hash << 10);
     hash ^= (hash >> 6);
-    hash += page_id_.id_;
+    hash += region_.id_;
     hash += (hash << 10);
     hash ^= (hash >> 6);
     hash += tag_id_.node_id_;
@@ -59,7 +81,7 @@ struct MemTask {
     size_t result = 17;
     result = result * 31 + tag_id_.unique_;
     result = result * 31 + tag_id_.node_id_;
-    result = result * 31 + page_id_.id_;
+    result = result * 31 + region_.id_;
     return result;
   }
 
@@ -68,16 +90,16 @@ struct MemTask {
     size_t hash = 14695981039346656037UL;
     hash = (hash ^ tag_id_.unique_) * 1099511628211UL;
     hash = (hash ^ tag_id_.node_id_) * 1099511628211UL;
-    hash = (hash ^ page_id_.id_) * 1099511628211UL;
+    hash = (hash ^ region_.id_) * 1099511628211UL;
     return hash;
   }
 };
 
 struct Metadata {
   hermes::TagId tag_id_;
-  size_t page_id_;
+  size_t region_;
   chi::Block block_;
-  hipc::Pointer data_;
+  hipc::Pointer data_ = hipc::Pointer::GetNull();
   int dev_id_;
 };
 
@@ -90,23 +112,25 @@ class GpuCache {
   hermes::Client mdm_;
 
  public:
+  HSHM_GPU_FUN
   GpuCache(int count, int depth, hermes::Client mdm)
-      : gpu_queues_(count, depth),
-        cpu_queue_(depth),
-        md_cache_(count * depth),
+      : gpu_queues_(CHI_CLIENT->data_alloc_, count, depth),
+        cpu_queue_(CHI_CLIENT->main_alloc_, depth),
+        md_cache_(CHI_CLIENT->data_alloc_, count * depth),
         mdm_(mdm) {}
 
  public:
   /** Write to gcache */
   HSHM_GPU_FUN
   bool Write(const MemTask &mem_task, char *buf) {
+    const PageRegion &region = mem_task.region_;
     hipc::ScopedRwReadLock lock(md_lock_, 0);
     Metadata *md;
     if (Find(mem_task, md)) {
       // Write to the page
       hipc::FullPtr<char> page(md->data_);
-      size_t off = mem_task.page_id_.off_;
-      memcpy(page.ptr_ + off, buf, mem_task.size_);
+      size_t off = region.off_;
+      memcpy(page.ptr_ + off, buf, region.size_);
       return true;
     }
     return false;
@@ -116,12 +140,13 @@ class GpuCache {
   HSHM_GPU_FUN
   bool Read(const MemTask &mem_task, char *buf) {
     Metadata *md;
+    const PageRegion &region = mem_task.region_;
     hipc::ScopedRwReadLock lock(md_lock_, 0);
     if (Find(mem_task, md)) {
       // Read from the page
       hipc::FullPtr<char> page(md->data_);
-      size_t off = mem_task.page_id_.off_;
-      memcpy(buf, page.ptr_ + off, mem_task.size_);
+      size_t off = region.off_;
+      memcpy(buf, page.ptr_ + off, region.size_);
       return true;
     }
     return false;
@@ -144,9 +169,13 @@ class GpuCache {
     switch (mem_task->op_) {
       case GcacheOp::kRescore:
         // Rescore the page
+        Rescore(*mem_task);
         break;
       case GcacheOp::kFault:
         Fault(*mem_task);
+        break;
+      case GcacheOp::kFlush:
+        Flush(*mem_task);
         break;
       case GcacheOp::kEvict:
         Evict(*mem_task);
@@ -155,7 +184,20 @@ class GpuCache {
   }
 
  private:
-  /** Fault into gcache */
+  /** Rescore pages */
+  HSHM_GPU_FUN
+  void Rescore(const MemTask &mem_task) {
+    if (mem_task.score_ >= GCACHE_MIN_SCORE) {
+      Fault(mem_task);
+    } else if (mem_task.score_ > 0.0) {
+      Evict(mem_task);
+      FaultMd(mem_task);
+    } else {
+      Evict(mem_task);
+    }
+  }
+
+  /** Fault md + data into gcache */
   HSHM_GPU_FUN
   bool Fault(const MemTask &mem_task) {
     Metadata *md;
@@ -163,9 +205,35 @@ class GpuCache {
     if (!Find(mem_task, md)) {
       GetOrCreateMetadata(mem_task, md);
     }
+    // Check if the data pointer is valid
+    if (!md->data_.IsNull()) {
+      return true;
+    }
     // Fault the page
     hipc::FullPtr<char> page(md->data_);
-    size_t off = mem_task.page_id_.off_;
+    const PageRegion &region = mem_task.region_;
+    hipc::ScopedTlsAllocator<CHI_MAIN_ALLOC_T> tls(CHI_CLIENT->main_alloc_);
+    hermes::Context ctx;
+    ctx.mctx_ = tls.alloc_.ctx_;
+    hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
+    hermes::Blob blob(md->data_ + region.off_, region.size_, false);
+    chi::string blob_name(CHI_CLIENT->main_alloc_, sizeof(size_t));
+    memcpy(blob_name.data(), &region.id_, sizeof(size_t));
+    bkt.PartialGet(blob_name, blob, region.off_);
+    return true;
+  }
+
+  /** Fault only metadata into gcache */
+  HSHM_GPU_FUN
+  bool FaultMd(const MemTask &mem_task) {
+    Metadata *md;
+    // Create metadata for page
+    if (!Find(mem_task, md)) {
+      GetOrCreateMetadata(mem_task, md);
+    }
+    // Fault the page
+    hipc::FullPtr<char> page(md->data_);
+    size_t off = mem_task.region_.off_;
     hermes::Bucket bkt(mem_task.tag_id_, mdm_);
     // bkt.PartialGet()
     return true;
@@ -197,7 +265,7 @@ class GpuCache {
   bool Invalidate(const MemTask &mem_task) {
     Metadata *md;
     // Don't do partial invalidations
-    if (mem_task.page_size_ != mem_task.size_) {
+    if (mem_task.region_.page_size_ != mem_task.region_.size_) {
       return false;
     }
     // Find metadata to evict
@@ -213,30 +281,36 @@ class GpuCache {
   bool Flush(const MemTask &mem_task) {
     Metadata *md;
     hipc::ScopedRwReadLock lock(md_lock_, 0);
-    if (Find(mem_task, md)) {
-      // Flush the page
-      hipc::FullPtr<char> page(md->data_);
-      size_t off = mem_task.page_id_.off_;
-      hermes::Bucket bkt(mem_task.tag_id_, mdm_);
-      // bkt.PartialPut()
-      return true;
+    if (!Find(mem_task, md)) {
+      return false;
     }
+    // Flush the page
+    hipc::FullPtr<char> page(md->data_);
+    const PageRegion &region = mem_task.region_;
+    hipc::ScopedTlsAllocator<CHI_MAIN_ALLOC_T> tls(CHI_CLIENT->main_alloc_);
+    hermes::Context ctx;
+    ctx.mctx_ = tls.alloc_.ctx_;
+    hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
+    hermes::Blob blob(md->data_ + region.off_, region.size_, false);
+    chi::string blob_name(CHI_CLIENT->main_alloc_, sizeof(size_t));
+    memcpy(blob_name.data(), &region.id_, sizeof(size_t));
+    bkt.PartialPut(blob_name, blob, region.off_);
     return false;
   }
 
   /** Find the metadata associated with MemTask page */
   HSHM_INLINE_GPU_FUN
-  bool Find(const MemTask &mem_task, Metadata *&data) {
-    return Find(mem_task, data, mem_task.Hash());
+  bool Find(const MemTask &mem_task, Metadata *&md) {
+    return Find(mem_task, md, mem_task.Hash());
   }
 
   /** Find the metadata associated with MemTask page */
   HSHM_GPU_FUN
-  bool Find(const MemTask &mem_task, Metadata *&data, size_t mem_task_hash) {
+  bool Find(const MemTask &mem_task, Metadata *&md, size_t mem_task_hash) {
     size_t id = mem_task_hash % md_cache_.size();
-    data = &md_cache_[id];
-    if (data->tag_id_ == mem_task.tag_id_ &&
-        data->page_id_ == mem_task.page_id_.id_) {
+    md = &md_cache_[id];
+    if (md->tag_id_ == mem_task.tag_id_ &&
+        md->region_ == mem_task.region_.id_) {
       return true;
     }
     return false;

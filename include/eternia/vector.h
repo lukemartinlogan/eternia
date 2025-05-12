@@ -8,16 +8,20 @@ namespace eternia {
 
 #define DEFAULT_TCACHE_PAGE_SIZE 4096
 #define DEFAULT_TCACHE_SLOTS 32
+#define TCACHE_MIN_SCORE 0.8
 
 template <size_t SIZE>
 struct StaticPage {
   char buf_[SIZE];
   size_t size_ = SIZE;
   size_t id_;
+  float score_;
   StaticPage *next_;
 };
 
 struct Context {
+  size_t tcache_page_size_ = DEFAULT_TCACHE_PAGE_SIZE;
+  size_t tcache_page_slots_ = DEFAULT_TCACHE_SLOTS;
   size_t gcache_page_size_ = MEGABYTES(1);
 };
 
@@ -55,7 +59,7 @@ struct PageMap {
   PageMap() { memset(bkts_, 0, sizeof(bkts_)); }
 
   HSHM_INLINE_CROSS_FUN
-  void Emplace(const PageId &page_id, Page *page) {
+  void Emplace(const PageRegion &page_id, Page *page) {
     size_t bkt_id = page_id.Hash() % DEPTH;
     Page *bkt = bkts_[bkt_id];
     page->next_ = bkt;
@@ -63,7 +67,7 @@ struct PageMap {
   }
 
   HSHM_INLINE_CROSS_FUN
-  Page *Find(const PageId &page_id) {
+  Page *Find(const PageRegion &page_id) {
     size_t bkt_id = page_id.Hash() % DEPTH;
     Page *bkt = bkts_[bkt_id];
     while (bkt) {
@@ -76,7 +80,7 @@ struct PageMap {
   }
 
   HSHM_INLINE_CROSS_FUN
-  Page *Remove(const PageId &page_id) {
+  Page *Remove(const PageRegion &page_id) {
     size_t bkt_id = page_id.Hash() % DEPTH;
     Page *bkt = bkts_[bkt_id];
     if (bkt == nullptr) {
@@ -118,19 +122,68 @@ class Vector {
   PageMap<Page, TCACHE_PAGE_SLOTS> page_map_;
   Page *last_page_;
   hipc::FullPtr<GpuCache> gcache_;
+  size_t page_bnds_ = 0;  // A counter for number of page boundaries crossed
 
  public:
+  /** Default constructor */
+  HSHM_INLINE_CROSS_FUN
   Vector() = default;
+
+  /** Emplace constructor */
+  HSHM_INLINE_CROSS_FUN
   Vector(hermes::Bucket bkt, const Context &ctx, int gpu_id) {
     bkt_ = bkt;
     ctx_ = ctx;
+    ctx_.tcache_page_size_ = TCACHE_PAGE_SIZE;
+    ctx_.tcache_page_slots_ = TCACHE_PAGE_SLOTS;
     gpu_alloc_ = CHI_CLIENT->GetGpuDataAlloc(gpu_id);
     gcache_ = ETERNIA_CLIENT->gcache_[gpu_id];
     last_page_ = nullptr;
   }
 
-  /**  */
+  /** Destroy vector */
   void Destroy() {}
+
+  /** Locally rescore a tcache page */
+  HSHM_INLINE_GPU_FUN
+  void SuggestScore(const PageRegion &region, float score) {
+    Page *page = page_map_.Find(region);
+    if (page) {
+      page->score_ = score;
+      if (score < TCACHE_MIN_SCORE && region.modified_) {
+        FlushPage(region);
+      }
+    }
+  }
+
+  /** Locally rescore a tcache page */
+  HSHM_INLINE_GPU_FUN
+  void SolidfyScore(const PageRegion &region, float score) {
+    Page *page = page_map_.Find(region);
+    // Prioritize previously suggested page score
+    if (page && score < page->score_) {
+      return;
+    }
+    // Fault into tcache if score is high enough
+    if (!page && score >= TCACHE_MIN_SCORE) {
+      page = FaultPage(region, score);
+    }
+    // Evict from tcache if score is too low
+    if (page && page->score_ < TCACHE_MIN_SCORE) {
+      InvalidatePage(region);
+    }
+    // Rescore the page in gcache
+    MemTask mem_task;
+    mem_task.op_ = GcacheOp::kRescore;
+    mem_task.tag_id_ = bkt_.id_;
+    mem_task.region_ = region.ChangePageSize(ctx_.gcache_page_size_);
+    mem_task.score_ = score;
+    SubmitMemTask(mem_task);
+  }
+
+  /** Submit MemTask to Gcache */
+  HSHM_INLINE_GPU_FUN
+  void SubmitMemTask(const MemTask &task) { gcache_->SubmitMemTask(task); }
 
   /** Find value at offset off in tcache.
    * @param off Offset is in units of T.
@@ -138,12 +191,13 @@ class Vector {
    */
   HSHM_INLINE_GPU_FUN
   bool FindValInTcache(size_t off, T *&val) {
-    PageId page_id(off * sizeof(T), TCACHE_PAGE_SIZE);
+    PageRegion page_id(off * sizeof(T), ctx_.tcache_page_size_);
     last_page_ = FindPageInTcache(off, page_id);
     val = GetValFromPage(page_id);
     return false;
   }
 
+ private:
   /** Find page containing offset off in tcache.
    * @param off Offset is in units of T.
    * @param page Pointer to page containing offset off.
@@ -151,40 +205,41 @@ class Vector {
    */
   HSHM_INLINE_GPU_FUN
   bool FindPageInTcache(size_t off, Page *&page) {
-    PageId page_id(off * sizeof(T), TCACHE_PAGE_SIZE);
+    PageRegion page_id(off * sizeof(T), ctx_.tcache_page_size_);
     return FindPageInTcache(off, page, page_id);
   }
 
-  /** Find page containing offset off in tcache, given PageId
+  /** Find page containing offset off in tcache, given PageRegion
    * @param off Offset is in units of T.
    * @param page Pointer to page containing offset off.
-   * @param page_id PageId of the page to find.
+   * @param page_id PageRegion of the page to find.
    * @return True if the page is found in tcache, false otherwise.
    */
   HSHM_INLINE_GPU_FUN
-  bool FindPageInTcache(size_t off, Page *&page, const PageId &page_id) {
+  bool FindPageInTcache(size_t off, Page *&page, const PageRegion &page_id) {
     // Check the last pointer
     if (last_page_ && last_page_->id_ == page_id.id_) {
       return true;
     }
     // Check the hash pointer
+    page_bnds_++;
     page = page_map_.Find(page_id);
     return page != nullptr;
   }
 
- private:
-  /** Gets the value in page using PageId */
-  T *GetValFromPage(const PageId &page_id) {
+  /** Gets the value in page using PageRegion */
+  HSHM_INLINE_GPU_FUN
+  T *GetValFromPage(const PageRegion &page_id) {
     if (last_page_) {
       return (T *)(last_page_->buf_)[page_id.off_];
     }
     return nullptr;
   }
 
- public:
+  /** Allocate a tcache page */
   HSHM_INLINE_GPU_FUN
   Page *AllocatePage(size_t off) {
-    PageId page_id(off, ctx_.tcache_page_size_);
+    PageRegion page_id(off, ctx_.tcache_page_size_);
     Page *page = page_alloc_.Allocate();
     if (!page) {
       return nullptr;
@@ -193,17 +248,73 @@ class Vector {
     return page;
   }
 
+  /** Free page from tcache */
   HSHM_INLINE_GPU_FUN
-  void EvictPage(size_t off) {
-    PageId page_id(off, ctx_.tcache_page_size_);
+  void FreePage(size_t off) {
+    PageRegion page_id(off, ctx_.tcache_page_size_);
     Page *page = page_map_.Remove(page_id);
     if (page == last_page_) {
       last_page_ = nullptr;
     }
   }
 
+  /** Fault page from gcache into tcache */
   HSHM_INLINE_GPU_FUN
-  void PrefetchPage(size_t off) {}
+  Page *FaultPage(const PageRegion &page_id, float score) {
+    // Make sure page is not already in tcache
+    Page *page = page_map_.Find(page_id);
+    if (page) {
+      return page;
+    }
+    // Create page in tcache
+    page = page_alloc_.Allocate();
+    if (!page) {
+      return nullptr;
+    }
+    page->id_ = page_id.id_;
+    page->score_ = score;
+    page_map_.Emplace(page_id, page);
+    // Copy page from gcache (if exists)
+    MemTask mem_task;
+    mem_task.op_ = GcacheOp::kFault;
+    mem_task.tag_id_ = bkt_.id_;
+    mem_task.region_ = page_id.ChangePageSize(ctx_.gcache_page_size_);
+    bool ret = gcache_->Read(mem_task, page->buf_ + page_id.off_);
+    if (ret) {
+      return page;
+    }
+    // Copy page into gcache
+    gcache_->SubmitMemTask(mem_task);
+    do {
+      // Wait for page to be created
+      ret = gcache_->Read(mem_task, page->buf_ + page_id.off_);
+    } while (!ret);
+    return page;
+  }
+
+  /** Flush page to gcache */
+  HSHM_INLINE_GPU_FUN
+  void FlushPage(const PageRegion &region) {
+    Page *page = page_map_.Find(region);
+    if (!page) {
+      return;
+    }
+    MemTask mem_task;
+    mem_task.op_ = GcacheOp::kFlush;
+    mem_task.tag_id_ = bkt_.id_;
+    mem_task.region_ = region.ChangePageSize(ctx_.gcache_page_size_);
+    mem_task.score_ = page->score_;
+    gcache_->Write(mem_task, page->buf_ + region.off_);
+    SubmitMemTask(mem_task);
+  }
+
+  /** Evict page from tcache */
+  void InvalidatePage(const PageRegion &region) {
+    Page *page = page_map_.Remove(region);
+    if (page) {
+      page_alloc_.Free(page);
+    }
+  }
 };
 
 template <typename T, size_t TCACHE_PAGE_SIZE = DEFAULT_TCACHE_PAGE_SIZE,
