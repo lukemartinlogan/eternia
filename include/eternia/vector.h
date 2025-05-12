@@ -41,7 +41,7 @@ struct PageAllocator {
       return nullptr;
     } else if (tail_ < DEPTH) {
       size_t tail = tail_++;
-      return pages_[tail];
+      return &pages_[tail];
     } else {
       size_t tail = (tail_++) % DEPTH;
       return alloc_[tail];
@@ -146,6 +146,9 @@ class Vector {
     last_page_ = nullptr;
   }
 
+  /** Get size */
+  size_t size() const { return size_; }
+
   /** Locally rescore a tcache page */
   HSHM_INLINE_GPU_FUN
   void SuggestScore(const PageRegion &region, float score) {
@@ -160,7 +163,7 @@ class Vector {
 
   /** Locally rescore a tcache page */
   HSHM_INLINE_GPU_FUN
-  void SolidfyScore(const PageRegion &region, float score) {
+  void SolidifyScore(const PageRegion &region, float score) {
     Page *page = page_map_.Find(region);
     // Prioritize previously suggested page score
     if (page && score < page->score_) {
@@ -194,23 +197,14 @@ class Vector {
   HSHM_INLINE_GPU_FUN
   bool FindValInTcache(size_t off, T *&val) {
     PageRegion page_id(off * sizeof(T), ctx_.tcache_page_size_);
-    last_page_ = FindPageInTcache(off, page_id);
+    if (!FindPageInTcache(off, last_page_, page_id)) {
+      return false;
+    }
     val = GetValFromPage(page_id);
-    return false;
+    return true;
   }
 
  private:
-  /** Find page containing offset off in tcache.
-   * @param off Offset is in units of T.
-   * @param page Pointer to page containing offset off.
-   * @return True if the page is found in tcache, false otherwise.
-   */
-  HSHM_INLINE_GPU_FUN
-  bool FindPageInTcache(size_t off, Page *&page) {
-    PageRegion page_id(off * sizeof(T), ctx_.tcache_page_size_);
-    return FindPageInTcache(off, page, page_id);
-  }
-
   /** Find page containing offset off in tcache, given PageRegion
    * @param off Offset is in units of T.
    * @param page Pointer to page containing offset off.
@@ -311,6 +305,7 @@ class Vector {
   }
 
   /** Evict page from tcache */
+  HSHM_INLINE_GPU_FUN
   void InvalidatePage(const PageRegion &region) {
     Page *page = page_map_.Remove(region);
     if (page) {
@@ -324,6 +319,7 @@ template <typename T, size_t TCACHE_PAGE_SIZE = DEFAULT_TCACHE_PAGE_SIZE,
 class VectorSet {
  public:
   hermes::Bucket bkt_;
+  size_t size_ = 0;
   Vector<T, TCACHE_PAGE_SIZE, TCACHE_PAGE_SLOTS> gpus_[MAX_GPU];
 
  public:
@@ -333,6 +329,15 @@ class VectorSet {
       gpus_[gpu_id] = Vector<T>(bkt_, ctx, gpu_id);
     }
   }
+
+  void resize(size_t size) {
+    for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
+      gpus_[gpu_id].size_ = size;
+    }
+    size_ = size;
+  }
+
+  size_t size() const { return size_; }
 
   void Destroy() { bkt_.Destroy(); }
 

@@ -40,10 +40,10 @@ class SeqTxIterator {
   }
 
   HSHM_GPU_FUN
-  SeqTxIterator begin() const { return iterator(vec_, off_, size_, 0); }
+  SeqTxIterator begin() const { return SeqTxIterator(vec_, off_, size_, 0); }
 
   HSHM_GPU_FUN
-  SeqTxIterator end() const { return iterator(vec_, off_, size_, size_); }
+  SeqTxIterator end() const { return SeqTxIterator(vec_, off_, size_, size_); }
 
   HSHM_GPU_FUN
   PageRegion operator*() const {
@@ -102,9 +102,12 @@ class SeqTx : public Transaction {
 
   HSHM_GPU_FUN
   void Prefetch() {
-    Prefetch(*this);
+    Transaction::Prefetch(*this);
     head_ = tail_;
   }
+
+  HSHM_INLINE_GPU_FUN
+  VecT &GetVec() { return *vec_; }
 };
 }  // namespace eternia
 
