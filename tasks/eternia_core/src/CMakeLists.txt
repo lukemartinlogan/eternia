@@ -9,6 +9,10 @@ set(MOD_EXPORTS ${REPO_NAMESPACE}_eternia_core_exports)
 add_chimod_runtime_lib(${REPO_NAMESPACE} eternia_core eternia_core_runtime.cc)
 add_chimod_client_lib(${REPO_NAMESPACE} eternia_core eternia_core_client.cc)
 
+target_link_libraries(eternia_eternia_core_client PUBLIC hermes::hermes_core_client)
+target_link_libraries(eternia_eternia_core_client_gpu PUBLIC hermes::hermes_core_client_gpu)
+target_link_libraries(eternia_eternia_core PUBLIC hermes::hermes_core_client_gpu)
+
 # ------------------------------------------------------------------------------
 # Install eternia_core Task Library
 # ------------------------------------------------------------------------------

@@ -1,3 +1,6 @@
+#ifndef ETERNIA_VECTOR_H
+#define ETERNIA_VECTOR_H
+
 #include <hermes/hermes.h>
 
 #include "eternia/eternia_core_client.h"
@@ -338,3 +341,5 @@ class VectorSet {
 };
 
 }  // namespace eternia
+
+#endif  // ETERNIA_VECTOR_H

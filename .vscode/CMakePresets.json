@@ -29,7 +29,6 @@
                 "CHIMAERA_ENABLE_CUDA": "ON",
                 "CHIMAERA_ENABLE_ROCM": "OFF",
                 "BUILD_TESTS": "OFF",
-                "CMAKE_CUDA_ARCHITECTURES": "75",
                 "ETERNIA_ENABLE_CMAKE_DOTENV": "ON"
             }
         },
@@ -44,7 +43,6 @@
                 "CHIMAERA_ENABLE_CUDA": "OFF",
                 "CHIMAERA_ENABLE_ROCM": "ON",
                 "BUILD_TESTS": "OFF",
-                "CMAKE_CUDA_ARCHITECTURES": "75",
                 "ETERNIA_ENABLE_CMAKE_DOTENV": "ON"
             }
         },

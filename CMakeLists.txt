@@ -126,13 +126,14 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-add_subdirectory(src)
-add_subdirectory(benchmark)
+# add_subdirectory(src)
 add_subdirectory(tasks)
+
+# add_subdirectory(benchmark)
 
 # -----------------------------------------------------------------------------
 # Install Hermes Headers
 # -----------------------------------------------------------------------------
 install(DIRECTORY include DESTINATION ${CMAKE_INSTALL_PREFIX})
 
-# jarvis_repo_add("${CMAKE_SOURCE_DIR}/test/jarvis_eternia" "${CMAKE_SOURCE_DIR}/test/jarvis_eternia/pipelines")
+jarvis_repo_add("${CMAKE_SOURCE_DIR}/test/jarvis_eternia" "${CMAKE_SOURCE_DIR}/test/jarvis_eternia/pipelines")

@@ -1,6 +1,10 @@
-#include <hermes/hermes.h>
+#ifndef ETERNIA_LIBGPU_H
+#define ETERNIA_LIBGPU_H
 
-#include "hermes_shm/constants/macros.h"
+#include <hermes/hermes.h>
+#include <hermes_shm/constants/macros.h>
+
+#include "constants.h"
 
 #define GCACHE_MIN_SCORE 0.8
 
@@ -318,3 +322,5 @@ class GpuCache {
 };
 
 }  // namespace eternia
+
+#endif

@@ -1,3 +1,6 @@
+#ifndef ETERNIA_TRANSACTION_H
+#define ETERNIA_TRANSACTION_H
+
 #include "constants.h"
 #include "vector.h"
 
@@ -30,3 +33,5 @@ class Transaction {
 };
 
 };  // namespace eternia
+
+#endif
