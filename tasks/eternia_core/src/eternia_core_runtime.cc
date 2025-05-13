@@ -32,14 +32,16 @@ HSHM_GPU_KERNEL void InitEterniaRuntime(int qcount, int qdepth,
 template <typename QueueT>
 HSHM_GPU_FUN void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
                                    QueueT &queue) {
+  GpuCache::AGG_MAP_T agg_map(CHI_CLIENT->data_alloc_);
   size_t count = queue.size();
   for (size_t i = 0; i < count; ++i) {
     MemTask task;
     if (queue.pop(task).IsNull()) {
       break;
     }
-    gcache->ProcessMemTask(&task);
+    gcache->AggregateTask(agg_map, &task);
   }
+  gcache->ProcessMemTasks(agg_map);
 }
 
 HSHM_GPU_KERNEL void PollCpuQueue(hipc::Pointer gcache_p) {

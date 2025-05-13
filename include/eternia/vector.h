@@ -10,7 +10,7 @@
 namespace eternia {
 
 #define DEFAULT_TCACHE_PAGE_SIZE 4096
-#define DEFAULT_TCACHE_SLOTS 32
+#define DEFAULT_TCACHE_SLOTS 256
 #define TCACHE_MIN_SCORE 0.8
 
 template <size_t SIZE>

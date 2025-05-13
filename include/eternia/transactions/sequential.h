@@ -26,6 +26,9 @@ class SeqTxIterator {
   SeqTxIterator &operator++() {
     size_t rem = pos_ % vec_.ctx_.tcache_page_size_;
     pos_ += vec_.ctx_.tcache_page_size_ - rem;
+    if (pos_ >= size_) {
+      pos_ = size_;
+    }
     return *this;
   }
 
@@ -63,7 +66,6 @@ class SeqTx : public Transaction {
   size_t head_ = 0;        // Prefetch head
   size_t tail_ = 0;        // Prefetch tail
   size_t lookahead_ = 16;  // Prefetch lookahead
-  size_t interval_ = 8;    // Prefetch interval
   IoFlags io_flags_;       // IO flags
 
   HSHM_GPU_FUN
@@ -71,14 +73,11 @@ class SeqTx : public Transaction {
       : vec_(&vec), off_(off), size_(size), io_flags_(io_flags) {}
 
   HSHM_GPU_FUN
-  ~SeqTx() {}
+  ~SeqTx() { Prefetch(); }
 
   HSHM_GPU_FUN
   T &operator[](size_t i) {
     T *val;
-    if (vec_->page_bnds_ % interval_ == 0) {
-      Prefetch();
-    }
     if (vec_->FindValInTcache(i + off_, val)) {
       return *val;
     }

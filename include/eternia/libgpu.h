@@ -61,10 +61,8 @@ struct MemTask {
   PageRegion region_;
   float score_;
 
-  HSHM_INLINE_CROSS_FUN size_t Hash() const { return Hash1(); }
-
   HSHM_INLINE_CROSS_FUN
-  size_t Hash1() const {
+  size_t Hash() const {
     // Jenkins one at a time hash
     size_t hash = 0;
     hash += tag_id_.unique_;
@@ -81,44 +79,62 @@ struct MemTask {
   }
 
   HSHM_INLINE_CROSS_FUN
-  size_t Hash2() const {
-    size_t result = 17;
-    result = result * 31 + tag_id_.unique_;
-    result = result * 31 + tag_id_.node_id_;
-    result = result * 31 + region_.id_;
-    return result;
+  size_t operator()(const MemTask &obj) const { return obj.Hash(); }
+
+  HSHM_INLINE_CROSS_FUN
+  bool operator==(const MemTask &other) const {
+    return tag_id_ == other.tag_id_ && op_ == other.op_ &&
+           region_.id_ == other.region_.id_;
   }
 
   HSHM_INLINE_CROSS_FUN
-  size_t Hash3() const {
-    size_t hash = 14695981039346656037UL;
-    hash = (hash ^ tag_id_.unique_) * 1099511628211UL;
-    hash = (hash ^ tag_id_.node_id_) * 1099511628211UL;
-    hash = (hash ^ region_.id_) * 1099511628211UL;
-    return hash;
-  }
+  bool operator!=(const MemTask &other) const { return !(*this == other); }
 };
 
 struct Metadata {
   hermes::TagId tag_id_;
-  size_t region_;
+  size_t page_id_;
   chi::Block block_;
   hipc::Pointer data_ = hipc::Pointer::GetNull();
   int dev_id_;
 };
 
+struct MdBucket : public hipc::ShmContainer {
+  typedef chi::data::ipc::slist<Metadata> MD_LIST_T;
+  chi::data::ipc::slist<Metadata> md_list_;
+  hipc::RwLock md_lock_;
+
+  MdBucket(const hipc::CtxAllocator<CHI_DATA_ALLOC_T> &alloc)
+      : md_list_(alloc) {}
+
+  HSHM_INLINE_CROSS_FUN
+  MdBucket(const hipc::CtxAllocator<CHI_DATA_ALLOC_T> &alloc,
+           const MdBucket &other)
+      : ShmContainer(), md_list_(alloc, other.md_list_), md_lock_() {}
+};
+
 class GpuCache {
  public:
-  chi::ipc::mpsc_queue<MemTask> cpu_queue_;
-  chi::data::ipc::vector<chi::data::ipc::mpsc_queue<MemTask>> gpu_queues_;
-  chi::data::ipc::vector<Metadata> md_cache_;
-  hipc::RwLock md_lock_;
+  typedef chi::ipc::mpsc_queue<MemTask> CPU_QUEUE_T;
+  typedef chi::data::ipc::mpsc_queue<MemTask> GPU_QUEUE_T;
+  typedef chi::data::ipc::vector<GPU_QUEUE_T> GPU_QUEUE_MAP_T;
+  typedef chi::data::ipc::vector<MdBucket> MD_CACHE_T;
+  typedef MdBucket::MD_LIST_T::iterator_t MD_LIST_ITER_T;
+  typedef chi::data::ipc::slist<MemTask> MEM_TASK_SET_T;
+  typedef chi::data::unordered_map<MemTask, MEM_TASK_SET_T, MemTask> AGG_MAP_T;
+
+ public:
+  CPU_QUEUE_T cpu_queue_;
+  GPU_QUEUE_MAP_T gpu_queues_;
+  MD_CACHE_T md_cache_;
   hermes::Client mdm_;
+  int nthreads_;  // Number of gcache workers
 
  public:
   HSHM_GPU_FUN
   GpuCache(int count, int depth, hermes::Client mdm)
-      : gpu_queues_(CHI_CLIENT->data_alloc_, count, depth),
+      : nthreads_(count),
+        gpu_queues_(CHI_CLIENT->data_alloc_, count, depth),
         cpu_queue_(CHI_CLIENT->main_alloc_, depth),
         md_cache_(CHI_CLIENT->data_alloc_, count * depth),
         mdm_(mdm) {}
@@ -128,32 +144,42 @@ class GpuCache {
   HSHM_GPU_FUN
   bool Write(const MemTask &mem_task, char *buf) {
     const PageRegion &region = mem_task.region_;
-    hipc::ScopedRwReadLock lock(md_lock_, 0);
-    Metadata *md;
-    if (Find(mem_task, md)) {
-      // Write to the page
-      hipc::FullPtr<char> page(md->data_);
-      size_t off = region.off_;
-      memcpy(page.ptr_ + off, buf, region.size_);
-      return true;
+    // Find bucket + metadata
+    MdBucket *md_bkt;
+    if (!FindBucket(mem_task, md_bkt)) {
+      return false;
     }
-    return false;
+    Metadata *md;
+    hipc::ScopedRwReadLock lock(md_bkt->md_lock_, 0);
+    if (!FindMetadata(mem_task, md_bkt, md)) {
+      return false;
+    }
+    // Write to the page
+    hipc::FullPtr<char> page(md->data_);
+    size_t off = region.off_;
+    memcpy(page.ptr_ + off, buf, region.size_);
+    return true;
   }
 
   /** Read from gcache */
   HSHM_GPU_FUN
   bool Read(const MemTask &mem_task, char *buf) {
-    Metadata *md;
     const PageRegion &region = mem_task.region_;
-    hipc::ScopedRwReadLock lock(md_lock_, 0);
-    if (Find(mem_task, md)) {
-      // Read from the page
-      hipc::FullPtr<char> page(md->data_);
-      size_t off = region.off_;
-      memcpy(buf, page.ptr_ + off, region.size_);
-      return true;
+    // Find bucket + metadata
+    MdBucket *md_bkt;
+    if (!FindBucket(mem_task, md_bkt)) {
+      return false;
     }
-    return false;
+    Metadata *md;
+    hipc::ScopedRwReadLock lock(md_bkt->md_lock_, 0);
+    if (!FindMetadata(mem_task, md_bkt, md)) {
+      return false;
+    }
+    // Read from the page
+    hipc::FullPtr<char> page(md->data_);
+    size_t off = region.off_;
+    memcpy(buf, page.ptr_ + off, region.size_);
+    return true;
   }
 
   /** Submit a memory task to the GCache */
@@ -168,34 +194,80 @@ class GpuCache {
 #endif
   }
 
-  /** Execute memory task */
-  HSHM_GPU_FUN void ProcessMemTask(MemTask *mem_task) {
-    switch (mem_task->op_) {
-      case GcacheOp::kRescore:
-        // Rescore the page
-        Rescore(*mem_task);
-        break;
-      case GcacheOp::kFault:
-        Fault(*mem_task);
-        break;
-      case GcacheOp::kFlush:
-        Flush(*mem_task);
-        break;
-      case GcacheOp::kEvict:
-        Evict(*mem_task);
-        break;
+  /** Aggregate memory task */
+  HSHM_GPU_FUN void AggregateTask(AGG_MAP_T &agg_map, MemTask *mem_task) {
+    agg_map[*mem_task].emplace_back(*mem_task);
+  }
+
+  /** Process memory tasks */
+  HSHM_GPU_FUN void ProcessMemTasks(AGG_MAP_T &agg_map) {
+    for (auto it = agg_map.begin(); it != agg_map.end(); ++it) {
+      MEM_TASK_SET_T &to_agg = (*it).GetVal();
+      // Merge aggregated tasks
+      chi::data::vector<MemTask> merged = MergeMemTasks(to_agg);
+      // Process the merged tasks
+      for (const MemTask &mem_task : merged) {
+        ProcessMemTask(mem_task);
+      }
     }
   }
 
  private:
+  /** Merge a group of memory tasks */
+  HSHM_GPU_FUN
+  chi::data::vector<MemTask> MergeMemTasks(MEM_TASK_SET_T &to_agg) {
+    // Copy memtasks to vector
+    chi::data::vector<MemTask> to_agg_sorted(to_agg.size());
+    size_t i = 0;
+    for (MemTask &mem_task : to_agg) {
+      to_agg_sorted[i] = mem_task;
+    }
+    // Sort the memtasks by offset
+    hshm::sort(to_agg_sorted.begin(), to_agg_sorted.end(),
+               [](const MemTask &a, const MemTask &b) {
+                 return a.region_.off_ < b.region_.off_;
+               });
+    // Aggregate memtasks
+    chi::data::vector<MemTask> agg(CHI_CLIENT->data_alloc_);
+    agg.reserve(to_agg_sorted.size());
+    agg.emplace_back(to_agg_sorted[0]);
+    for (size_t i = 1; i < to_agg_sorted.size(); ++i) {
+      MemTask &cur = agg.back();
+      MemTask &next = to_agg_sorted[i];
+      if (cur.region_.off_ + cur.region_.size_ == next.region_.off_) {
+        cur.region_.size_ += next.region_.size_;
+      } else {
+        agg.emplace_back(cur);
+      }
+    }
+    return agg;
+  }
+
+  /** Process a memory task */
+  HSHM_GPU_FUN
+  void ProcessMemTask(const MemTask &mem_task) {
+    switch (mem_task.op_) {
+      case GcacheOp::kRescore:
+        // Rescore the page
+        Rescore(mem_task);
+        break;
+      case GcacheOp::kFault:
+        Fault(mem_task);
+        break;
+      case GcacheOp::kFlush:
+        Flush(mem_task);
+        break;
+      case GcacheOp::kEvict:
+        Evict(mem_task);
+        break;
+    }
+  }
+
   /** Rescore pages */
   HSHM_GPU_FUN
   void Rescore(const MemTask &mem_task) {
     if (mem_task.score_ >= GCACHE_MIN_SCORE) {
       Fault(mem_task);
-    } else if (mem_task.score_ > 0.0) {
-      Evict(mem_task);
-      FaultMd(mem_task);
     } else {
       Evict(mem_task);
     }
@@ -204,10 +276,17 @@ class GpuCache {
   /** Fault md + data into gcache */
   HSHM_GPU_FUN
   bool Fault(const MemTask &mem_task) {
+    // Find or create bucket + metadata
+    MdBucket *md_bkt;
+    if (!FindBucket(mem_task, md_bkt)) {
+      return false;
+    }
     Metadata *md;
-    // Create metadata for page
-    if (!Find(mem_task, md)) {
-      GetOrCreateMetadata(mem_task, md);
+    hipc::ScopedRwReadLock lock(md_bkt->md_lock_, 0);
+    if (!FindMetadata(mem_task, md_bkt, md)) {
+      md_bkt->md_lock_.ReadUnlock();
+      CreateMetadata(mem_task, md);
+      md_bkt->md_lock_.ReadLock(0);
     }
     // Check if the data pointer is valid
     if (!md->data_.IsNull()) {
@@ -227,35 +306,23 @@ class GpuCache {
     return true;
   }
 
-  /** Fault only metadata into gcache */
-  HSHM_GPU_FUN
-  bool FaultMd(const MemTask &mem_task) {
-    Metadata *md;
-    // Create metadata for page
-    if (!Find(mem_task, md)) {
-      GetOrCreateMetadata(mem_task, md);
-    }
-    // Fault the page
-    hipc::FullPtr<char> page(md->data_);
-    size_t off = mem_task.region_.off_;
-    hermes::Bucket bkt(mem_task.tag_id_, mdm_);
-    // bkt.PartialGet()
-    return true;
-  }
-
   /** Get or create a metadata entry */
   HSHM_GPU_FUN
-  bool GetOrCreateMetadata(const MemTask &mem_task, Metadata *&md) {
-    hipc::ScopedRwWriteLock lock(md_lock_, 0);
-    // Check if the page is already in gcache
-    if (Find(mem_task, md)) {
-      return true;
+  bool CreateMetadata(const MemTask &mem_task, Metadata *&md) {
+    // Find bucket + metadata
+    MdBucket *md_bkt;
+    if (!FindBucket(mem_task, md_bkt)) {
+      return false;
     }
     // Create metadata for page
-    size_t hash = mem_task.Hash();
-    size_t id = hash % gpu_queues_.size();
-    md = &md_cache_[id];
-    return false;
+    hipc::ScopedRwWriteLock lock(md_bkt->md_lock_, 0);
+    md_bkt->md_list_.emplace_back();
+    md = &md_bkt->md_list_.back();
+    md->tag_id_ = mem_task.tag_id_;
+    md->page_id_ = mem_task.region_.id_;
+    md->data_ =
+        CHI_CLIENT->AllocateBuffer(HSHM_MCTX, mem_task.region_.page_size_).shm_;
+    return true;
   }
 
   /** Evict the page from gcache */
@@ -272,9 +339,16 @@ class GpuCache {
     if (mem_task.region_.page_size_ != mem_task.region_.size_) {
       return false;
     }
+    // Find bucket
+    MdBucket *md_bkt;
+    if (!FindBucket(mem_task, md_bkt)) {
+      return false;
+    }
     // Find metadata to evict
-    hipc::ScopedRwWriteLock lock(md_lock_, 0);
-    if (Find(mem_task, md)) {
+    hipc::ScopedRwWriteLock lock(md_bkt->md_lock_, 0);
+    auto it = FindMetadata(mem_task, md_bkt);
+    if (it != md_bkt->md_list_.end()) {
+      md_bkt->md_list_.erase(it);
       return true;
     }
     return false;
@@ -283,9 +357,14 @@ class GpuCache {
   /** Flush entry to scache */
   HSHM_GPU_FUN
   bool Flush(const MemTask &mem_task) {
+    // Find bucket + metadata
+    MdBucket *md_bkt;
+    if (!FindBucket(mem_task, md_bkt)) {
+      return false;
+    }
     Metadata *md;
-    hipc::ScopedRwReadLock lock(md_lock_, 0);
-    if (!Find(mem_task, md)) {
+    hipc::ScopedRwReadLock lock(md_bkt->md_lock_, 0);
+    if (!FindMetadata(mem_task, md_bkt, md)) {
       return false;
     }
     // Flush the page
@@ -304,20 +383,40 @@ class GpuCache {
 
   /** Find the metadata associated with MemTask page */
   HSHM_INLINE_GPU_FUN
-  bool Find(const MemTask &mem_task, Metadata *&md) {
-    return Find(mem_task, md, mem_task.Hash());
+  bool FindBucket(const MemTask &mem_task, MdBucket *&bkt) {
+    size_t mem_task_hash = mem_task.Hash();
+    size_t id = mem_task_hash % md_cache_.size();
+    bkt = &md_cache_[id];
+    return true;
   }
 
   /** Find the metadata associated with MemTask page */
-  HSHM_GPU_FUN
-  bool Find(const MemTask &mem_task, Metadata *&md, size_t mem_task_hash) {
-    size_t id = mem_task_hash % md_cache_.size();
-    md = &md_cache_[id];
-    if (md->tag_id_ == mem_task.tag_id_ &&
-        md->region_ == mem_task.region_.id_) {
-      return true;
+  HSHM_INLINE_GPU_FUN
+  bool FindMetadata(const MemTask &mem_task, MdBucket *md_bkt,
+                    Metadata *&md_ret) {
+    for (Metadata &md : md_bkt->md_list_) {
+      if (md.tag_id_ == mem_task.tag_id_ &&
+          md.page_id_ == mem_task.region_.id_) {
+        md_ret = &md;
+        return true;
+      }
     }
+    md_ret = nullptr;
     return false;
+  }
+
+  /** Find the metadata associated with MemTask page */
+  HSHM_INLINE_GPU_FUN
+  MD_LIST_ITER_T FindMetadata(const MemTask &mem_task, MdBucket *md_bkt) {
+    for (auto it = md_bkt->md_list_.begin(); it != md_bkt->md_list_.end();
+         ++it) {
+      Metadata &md = *it;
+      if (md.tag_id_ == mem_task.tag_id_ &&
+          md.page_id_ == mem_task.region_.id_) {
+        return it;
+      }
+    }
+    return md_bkt->md_list_.end();
   }
 };
 
