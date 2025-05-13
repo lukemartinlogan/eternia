@@ -273,6 +273,14 @@ class GpuCache {
     }
   }
 
+  /** Make blob name */
+  HSHM_GPU_FUN
+  chi::string MakeBlobName(const PageRegion &region) {
+    chi::string blob_name(CHI_CLIENT->main_alloc_, sizeof(size_t));
+    memcpy(blob_name.data(), &region.id_, sizeof(size_t));
+    return blob_name;
+  }
+
   /** Fault md + data into gcache */
   HSHM_GPU_FUN
   bool Fault(const MemTask &mem_task) {
@@ -300,8 +308,7 @@ class GpuCache {
     ctx.mctx_ = tls.alloc_.ctx_;
     hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
     hermes::Blob blob(md->data_ + region.off_, region.size_, false);
-    chi::string blob_name(CHI_CLIENT->main_alloc_, sizeof(size_t));
-    memcpy(blob_name.data(), &region.id_, sizeof(size_t));
+    chi::string blob_name = MakeBlobName(region);
     bkt.PartialGet(blob_name, blob, region.off_);
     return true;
   }
@@ -375,8 +382,7 @@ class GpuCache {
     ctx.mctx_ = tls.alloc_.ctx_;
     hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
     hermes::Blob blob(md->data_ + region.off_, region.size_, false);
-    chi::string blob_name(CHI_CLIENT->main_alloc_, sizeof(size_t));
-    memcpy(blob_name.data(), &region.id_, sizeof(size_t));
+    chi::string blob_name = MakeBlobName(region);
     bkt.PartialPut(blob_name, blob, region.off_);
     return false;
   }
