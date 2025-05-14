@@ -21,11 +21,6 @@
 
 namespace eternia {
 
-HSHM_GPU_KERNEL static void InitEterniaRuntimeSimple() {
-  printf("Creating gcache pointer\n");
-  HSHM_MEMORY_MANAGER->ScanBackends();
-}
-
 HSHM_GPU_KERNEL static void InitEterniaRuntime(int qcount, int qdepth,
                                                FullPtr<GpuCache> *gcache,
                                                hermes::Client client) {
@@ -50,7 +45,7 @@ HSHM_GPU_FUN static void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
     }
     gcache->AggregateTask(agg_map, &task);
   }
-  gcache->ProcessMemTasks(agg_map);
+  // gcache->ProcessMemTasks(agg_map);
 }
 
 HSHM_GPU_KERNEL static void PollCpuQueue(hipc::Pointer gcache_p) {

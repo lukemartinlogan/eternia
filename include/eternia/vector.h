@@ -13,13 +13,11 @@ namespace eternia {
 #define DEFAULT_TCACHE_SLOTS 256
 #define TCACHE_MIN_SCORE 0.8
 
-template <size_t SIZE>
-struct StaticPage {
-  char buf_[SIZE];
-  size_t size_ = SIZE;
+struct Page {
   size_t id_;
   float score_;
-  StaticPage *next_;
+  Page *next_;
+  char buf_[];
 };
 
 struct Context {
@@ -28,26 +26,41 @@ struct Context {
   size_t gcache_page_size_ = MEGABYTES(1);
 };
 
-template <typename Page, size_t DEPTH>
 struct PageAllocator {
   size_t head_ = 0, tail_ = 0;
-  Page pages_[DEPTH];
-  Page *alloc_[DEPTH];
-  PageAllocator() { memset(pages_, 0, sizeof(pages_)); }
+  size_t DEPTH;
+  size_t PAGE_SIZE;
+  char *page_data_;
+  Page **alloc_;
 
+  /** Default constructor */
   HSHM_INLINE_CROSS_FUN
-  Page *Allocate() {
+  PageAllocator() = default;
+
+  /** Create page allocator (per-kernel) */
+  HSHM_GPU_FUN
+  PageAllocator(const Context &ctx) {
+    PAGE_SIZE = sizeof(Page) + ctx.tcache_page_size_;
+    size_t size = PAGE_SIZE * ctx.tcache_page_slots_;
+    DEPTH = ctx.tcache_page_slots_;
+    page_data_ = (char *)malloc(size);
+    memset(page_data_, 0, size);
+  }
+
+  /** Allocate a page */
+  HSHM_INLINE_CROSS_FUN Page *Allocate() {
     if (tail_ - head_ >= DEPTH) {
       return nullptr;
     } else if (tail_ < DEPTH) {
       size_t tail = tail_++;
-      return &pages_[tail];
+      return (Page *)(page_data_ + (tail * PAGE_SIZE));
     } else {
       size_t tail = (tail_++) % DEPTH;
       return alloc_[tail];
     }
   }
 
+  /** Free a page */
   HSHM_INLINE_CROSS_FUN
   void Free(Page *page) {
     size_t head = (head_++) % DEPTH;
@@ -55,11 +68,21 @@ struct PageAllocator {
   }
 };
 
-template <typename Page, size_t DEPTH>
+template <typename Page>
 struct PageMap {
-  Page *bkts_[DEPTH];
+  size_t DEPTH;
+  Page **bkts_;
 
-  PageMap() { memset(bkts_, 0, sizeof(bkts_)); }
+  HSHM_INLINE_CROSS_FUN
+  PageMap() {}
+
+  HSHM_GPU_FUN
+  PageMap(const Context &ctx) {
+    DEPTH = ctx.tcache_page_slots_;
+    size_t size = ctx.tcache_page_slots_ * sizeof(Page *);
+    bkts_ = (Page **)malloc(size);
+    memset(bkts_, 0, size);
+  }
 
   HSHM_INLINE_CROSS_FUN
   void Emplace(const PageRegion &page_id, Page *page) {
@@ -111,19 +134,17 @@ struct PageMap {
   }
 };
 
-template <typename T, size_t TCACHE_PAGE_SIZE = DEFAULT_TCACHE_PAGE_SIZE,
-          size_t TCACHE_PAGE_SLOTS = DEFAULT_TCACHE_SLOTS>
+template <typename T>
 class Vector {
  public:
   typedef T Type;
-  typedef StaticPage<TCACHE_PAGE_SIZE> Page;
 
  public:
   hermes::Bucket bkt_;
   Context ctx_;
   CHI_DATA_GPU_ALLOC_T *gpu_alloc_;
-  PageAllocator<Page, TCACHE_PAGE_SLOTS> page_alloc_;
-  PageMap<Page, TCACHE_PAGE_SLOTS> page_map_;
+  PageAllocator page_alloc_;
+  PageMap<Page> page_map_;
   Page *last_page_;
   hipc::FullPtr<GpuCache> gcache_;
   size_t page_bnds_ = 0;  // A counter for number of page boundaries crossed
@@ -139,8 +160,6 @@ class Vector {
   Vector(hermes::Bucket bkt, const Context &ctx, int gpu_id) {
     bkt_ = bkt;
     ctx_ = ctx;
-    ctx_.tcache_page_size_ = TCACHE_PAGE_SIZE;
-    ctx_.tcache_page_slots_ = TCACHE_PAGE_SLOTS;
     gpu_alloc_ = CHI_CLIENT->GetGpuDataAlloc(gpu_id);
     gcache_ = ETERNIA_CLIENT->gcache_[gpu_id];
     last_page_ = nullptr;
@@ -314,34 +333,37 @@ class Vector {
   }
 };
 
-template <typename T, size_t TCACHE_PAGE_SIZE = DEFAULT_TCACHE_PAGE_SIZE,
-          size_t TCACHE_PAGE_SLOTS = DEFAULT_TCACHE_SLOTS>
+template <typename T>
 class VectorSet {
  public:
   hermes::Bucket bkt_;
   size_t size_ = 0;
-  Vector<T, TCACHE_PAGE_SIZE, TCACHE_PAGE_SLOTS> gpus_[MAX_GPU];
+  Vector<T> gpus_[HSHM_MAX_GPUS];
 
  public:
   VectorSet(const std::string &url, const Context &ctx = Context()) {
     bkt_ = hermes::Bucket(url);
-    for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
-      gpus_[gpu_id] = Vector<T>(bkt_, ctx, gpu_id);
-    }
+    // for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
+    //   gpus_[gpu_id] = Vector<T>(bkt_, ctx, gpu_id);
+    // }
   }
 
   void resize(size_t size) {
-    for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
-      gpus_[gpu_id].size_ = size;
-    }
-    size_ = size;
+    // for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
+    //   gpus_[gpu_id].size_ = size;
+    // }
+    // size_ = size;
   }
 
   size_t size() const { return size_; }
 
-  void Destroy() { bkt_.Destroy(); }
+  void Destroy() {
+    // bkt_.Destroy();
+  }
 
-  Vector<T> &Get(int gpu_id) { return gpus_[gpu_id]; }
+  // Vector<T> &Get(int gpu_id) {
+  //   return gpus_[gpu_id];
+  // }
 };
 
 }  // namespace eternia

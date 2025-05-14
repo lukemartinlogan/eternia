@@ -20,7 +20,7 @@ struct CreateTaskParams {
   IN int qcount_ = 1024;
   IN int qdepth_ = 64;
   IN hermes::Client hermes_;
-  OUT hipc::FullPtr<GpuCache> gcache_[MAX_GPU];
+  OUT hipc::FullPtr<GpuCache> gcache_[HSHM_MAX_GPUS];
 
   HSHM_INLINE_CROSS_FUN
   CreateTaskParams() = default;

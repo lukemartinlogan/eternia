@@ -13,10 +13,11 @@ __global__ void VectorAdd(et::Vector<float> v[3], size_t N, size_t nthreads) {
 }
 int main() {
   ETERNIA_INIT();
-  // et::VectorSet<float> x("/bigvec.parquet");
-  // et::VectorSet<float> y("y"), z("z");
-  // x.resize(1024);
-  // y.resize(1024);
+  printf("HERE???\n");
+  et::VectorSet<float> x("/bigvec.parquet");
+  et::VectorSet<float> y("y"), z("z");
+  x.resize(1024);
+  y.resize(1024);
   // et::Vector<float> vs[] = {x.Get(0), y.Get(0), z.Get(0)};
   // VectorAdd<<<1, 64>>>(vs, x.size(), 64);
 }
