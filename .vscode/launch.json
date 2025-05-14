@@ -75,9 +75,9 @@
       "name": "chimaera",
       "type": "cppdbg",
       "request": "launch",
-      "program": "/usr/local/cuda/bin/compute-sanitizer",
+      "program": "/home/llogan/.scspkg/packages/iowarp_runtime/bin/chimaera_start_runtime",
       "args": [
-        "/home/llogan/.scspkg/packages/iowarp_runtime/bin/chimaera_start_runtime"
+        ""
       ],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
