@@ -21,17 +21,25 @@
 
 namespace eternia {
 
-HSHM_GPU_KERNEL void InitEterniaRuntime(int qcount, int qdepth,
-                                        FullPtr<GpuCache> *gcache,
-                                        hermes::Client client) {
+HSHM_GPU_KERNEL static void InitEterniaRuntimeSimple() {
+  printf("Creating gcache pointer\n");
+  HSHM_MEMORY_MANAGER->ScanBackends();
+}
+
+HSHM_GPU_KERNEL static void InitEterniaRuntime(int qcount, int qdepth,
+                                               FullPtr<GpuCache> *gcache,
+                                               hermes::Client client) {
+  printf("Creating gcache pointer: %p\n", CHI_CLIENT->data_alloc_);
   hipc::ScopedTlsAllocator<CHI_DATA_ALLOC_T> tls(CHI_CLIENT->data_alloc_);
+  printf("Scoped TLS created\n");
   *gcache = tls.alloc_->NewObjLocal<GpuCache>(tls.alloc_.ctx_, qcount, qdepth,
                                               client);
+  printf("Created gcache pointer\n");
 }
 
 template <typename QueueT>
-HSHM_GPU_FUN void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
-                                   QueueT &queue) {
+HSHM_GPU_FUN static void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
+                                          QueueT &queue) {
   GpuCache::AGG_MAP_T agg_map(CHI_CLIENT->data_alloc_);
   size_t count = queue.size();
   for (size_t i = 0; i < count; ++i) {
@@ -44,7 +52,7 @@ HSHM_GPU_FUN void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
   gcache->ProcessMemTasks(agg_map);
 }
 
-HSHM_GPU_KERNEL void PollCpuQueue(hipc::Pointer gcache_p) {
+HSHM_GPU_KERNEL static void PollCpuQueue(hipc::Pointer gcache_p) {
   hipc::FullPtr<GpuCache> gcache(gcache_p);
   size_t tid = hshm::GpuApi::GetGlobalThreadId();
   if (tid == 0) {
@@ -52,7 +60,7 @@ HSHM_GPU_KERNEL void PollCpuQueue(hipc::Pointer gcache_p) {
   }
 }
 
-HSHM_GPU_KERNEL void PollGpuQueues(hipc::Pointer gcache_p) {
+HSHM_GPU_KERNEL static void PollGpuQueues(hipc::Pointer gcache_p) {
   hipc::FullPtr<GpuCache> gcache(gcache_p);
   size_t tid = hshm::GpuApi::GetGlobalThreadId();
   if (tid < gcache->gpu_queues_.size()) {
@@ -77,11 +85,19 @@ class Server : public Module {
     CreateTaskParams params = task->GetParams();
     CreateLaneGroup(kDefaultGroup, 1, QUEUE_LOW_LATENCY);
     client_.Init(id_);
+    // Initialize client on kernel
+    for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
+      hshm::GpuApi::SetDevice(gpu_id);
+      hipc::CopyMemoryManager<<<1, 1>>>(HSHM_MEMORY_MANAGER->gpu_ptrs_[gpu_id]);
+      chi::CreateClientKernel<<<1, 1>>>(CHI_CLIENT->GetGpuCpuAllocId(gpu_id),
+                                        CHI_CLIENT->GetGpuDataAllocId(gpu_id));
+      hshm::GpuApi::Synchronize();
+    }
     // Initialize queues on each GPU
     for (int gpu_id = 0; gpu_id < CHI_CLIENT->ngpu_; ++gpu_id) {
       hshm::GpuApi::SetDevice(gpu_id);
-      auto *gcache =
-          hshm::GpuApi::Malloc<FullPtr<GpuCache>>(sizeof(FullPtr<GpuCache>));
+      auto *gcache = hshm::GpuApi::MallocManaged<FullPtr<GpuCache>>(
+          sizeof(FullPtr<GpuCache>));
       InitEterniaRuntime<<<1, 1>>>(params.qcount_, params.qdepth_, gcache,
                                    params.hermes_);
       hshm::GpuApi::Synchronize();
