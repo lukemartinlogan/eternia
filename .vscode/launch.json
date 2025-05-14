@@ -42,16 +42,56 @@
       }
     },
     {
-      "name": "test_start_runtime",
+      "name": "et_tensor",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/bin/chimaera_start_runtime",
+      "program": "${workspaceFolder}/build/bin/et_tensor",
       "args": [
         ""
       ],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
-      "environment": [],
+      "environment": [
+        {
+          "name": "CHIMAERA_CONF",
+          "value": "/home/llogan/.jarvis/shared/eternia_vector/chimaera_run/chimaera_server.yaml"
+        },
+        {
+          "name": "HERMES_CONF",
+          "value": "/home/llogan/.jarvis/shared/eternia_run/hermes_run/hermes_server.yaml"
+        }
+      ],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    },
+    null,
+    {
+      "name": "et_tensor",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/et_tensor",
+      "args": [
+        ""
+      ],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [
+        {
+          "name": "CHIMAERA_CONF",
+          "value": "/home/llogan/.jarvis/shared/eternia_vector/chimaera_run/chimaera_server.yaml"
+        },
+        {
+          "name": "HERMES_CONF",
+          "value": "/home/llogan/.jarvis/shared/eternia_run/hermes_run/hermes_server.yaml"
+        }
+      ],
       "externalConsole": false,
       "MIMode": "gdb",
       "setupCommands": [
