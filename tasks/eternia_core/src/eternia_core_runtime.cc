@@ -36,7 +36,7 @@ template <typename QueueT>
 HSHM_GPU_FUN static void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
                                           QueueT &queue) {
   GpuCache::AGG_MAP_T agg_map(CHI_CLIENT->data_alloc_, 64);
-  printf("Polling eternia queue\n");
+  // printf("Polling eternia queue\n");
   size_t count = queue.size();
   for (size_t i = 0; i < count; ++i) {
     MemTask task;

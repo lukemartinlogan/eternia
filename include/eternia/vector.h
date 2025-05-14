@@ -30,12 +30,23 @@ struct PageAllocator {
   size_t head_ = 0, tail_ = 0;
   size_t DEPTH;
   size_t PAGE_SIZE;
-  char *page_data_;
-  Page **alloc_;
+  char *page_data_ = nullptr;
+  Page **alloc_ = nullptr;
 
   /** Default constructor */
   HSHM_INLINE_CROSS_FUN
   PageAllocator() = default;
+
+  /** Destructor */
+  HSHM_INLINE_CROSS_FUN
+  ~PageAllocator() {
+    if (page_data_) {
+      free(page_data_);
+    }
+    if (alloc_) {
+      free(alloc_);
+    }
+  }
 
   /** Create page allocator (per-kernel) */
   HSHM_GPU_FUN
@@ -45,6 +56,7 @@ struct PageAllocator {
     DEPTH = ctx.tcache_page_slots_;
     page_data_ = (char *)malloc(size);
     memset(page_data_, 0, size);
+    alloc_ = (Page **)malloc(ctx.tcache_page_slots_ * sizeof(Page *));
   }
 
   /** Allocate a page */
@@ -68,14 +80,23 @@ struct PageAllocator {
   }
 };
 
-template <typename Page>
 struct PageMap {
   size_t DEPTH;
-  Page **bkts_;
+  Page **bkts_ = nullptr;
 
+  /** Default constructor */
   HSHM_INLINE_CROSS_FUN
   PageMap() {}
 
+  /** Destructor */
+  HSHM_INLINE_CROSS_FUN
+  ~PageMap() {
+    if (bkts_) {
+      free(bkts_);
+    }
+  }
+
+  /** GPU constructor */
   HSHM_GPU_FUN
   PageMap(const Context &ctx) {
     DEPTH = ctx.tcache_page_slots_;
@@ -84,6 +105,43 @@ struct PageMap {
     memset(bkts_, 0, size);
   }
 
+  /** Copy constructor */
+  HSHM_INLINE_CROSS_FUN
+  PageMap(const PageMap &other) {
+    DEPTH = other.DEPTH;
+    bkts_ = other.bkts_;
+  }
+
+  /** Move constructor */
+  HSHM_INLINE_CROSS_FUN
+  PageMap(PageMap &&other) noexcept {
+    DEPTH = other.DEPTH;
+    bkts_ = other.bkts_;
+    other.bkts_ = nullptr;
+  }
+
+  /** Copy assignment */
+  HSHM_INLINE_CROSS_FUN
+  PageMap &operator=(const PageMap &other) {
+    if (this != &other) {
+      DEPTH = other.DEPTH;
+      bkts_ = other.bkts_;
+    }
+    return *this;
+  }
+
+  /** Move assignment */
+  HSHM_INLINE_CROSS_FUN
+  PageMap &operator=(PageMap &&other) noexcept {
+    if (this != &other) {
+      DEPTH = other.DEPTH;
+      bkts_ = other.bkts_;
+      other.bkts_ = nullptr;
+    }
+    return *this;
+  }
+
+  /** Emplace page into map */
   HSHM_INLINE_CROSS_FUN
   void Emplace(const PageRegion &page_id, Page *page) {
     size_t bkt_id = page_id.Hash() % DEPTH;
@@ -92,6 +150,7 @@ struct PageMap {
     bkts_[page_id.Hash() % DEPTH] = page;
   }
 
+  /** Find page in map */
   HSHM_INLINE_CROSS_FUN
   Page *Find(const PageRegion &page_id) {
     size_t bkt_id = page_id.Hash() % DEPTH;
@@ -105,6 +164,7 @@ struct PageMap {
     return nullptr;
   }
 
+  /** Remove page from map */
   HSHM_INLINE_CROSS_FUN
   Page *Remove(const PageRegion &page_id) {
     size_t bkt_id = page_id.Hash() % DEPTH;
@@ -144,7 +204,7 @@ class Vector {
   Context ctx_;
   CHI_DATA_GPU_ALLOC_T *gpu_alloc_;
   PageAllocator page_alloc_;
-  PageMap<Page> page_map_;
+  PageMap page_map_;
   Page *last_page_;
   hipc::FullPtr<GpuCache> gcache_;
   size_t page_bnds_ = 0;  // A counter for number of page boundaries crossed
@@ -163,6 +223,80 @@ class Vector {
     gpu_alloc_ = CHI_CLIENT->GetGpuDataAlloc(gpu_id);
     gcache_ = ETERNIA_CLIENT->gcache_[gpu_id];
     last_page_ = nullptr;
+  }
+
+  /** Initialize vector on GPU thread */
+  HSHM_GPU_FUN
+  Vector &LocalInit() {
+    page_alloc_ = PageAllocator(ctx_);
+    page_map_ = PageMap(ctx_);
+    return *this;
+  }
+
+  /** Copy constructor */
+  HSHM_INLINE_CROSS_FUN
+  Vector(const Vector &other) {
+    bkt_ = other.bkt_;
+    ctx_ = other.ctx_;
+    gpu_alloc_ = other.gpu_alloc_;
+    page_alloc_ = other.page_alloc_;
+    page_map_ = other.page_map_;
+    last_page_ = other.last_page_;
+    gcache_ = other.gcache_;
+    page_bnds_ = other.page_bnds_;
+    size_ = other.size_;
+  }
+
+  /** Move constructor */
+  HSHM_INLINE_CROSS_FUN
+  Vector(Vector &&other) noexcept {
+    bkt_ = std::move(other.bkt_);
+    ctx_ = std::move(other.ctx_);
+    gpu_alloc_ = other.gpu_alloc_;
+    page_alloc_ = std::move(other.page_alloc_);
+    page_map_ = std::move(other.page_map_);
+    last_page_ = other.last_page_;
+    gcache_ = std::move(other.gcache_);
+    page_bnds_ = other.page_bnds_;
+    size_ = other.size_;
+    other.last_page_ = nullptr;
+    other.size_ = 0;
+  }
+
+  /** Copy assignment */
+  HSHM_INLINE_CROSS_FUN
+  Vector &operator=(const Vector &other) {
+    if (this != &other) {
+      bkt_ = other.bkt_;
+      ctx_ = other.ctx_;
+      gpu_alloc_ = other.gpu_alloc_;
+      page_alloc_ = other.page_alloc_;
+      page_map_ = other.page_map_;
+      last_page_ = other.last_page_;
+      gcache_ = other.gcache_;
+      page_bnds_ = other.page_bnds_;
+      size_ = other.size_;
+    }
+    return *this;
+  }
+
+  /** Move assignment */
+  HSHM_INLINE_CROSS_FUN
+  Vector &operator=(Vector &&other) noexcept {
+    if (this != &other) {
+      bkt_ = std::move(other.bkt_);
+      ctx_ = std::move(other.ctx_);
+      gpu_alloc_ = other.gpu_alloc_;
+      page_alloc_ = std::move(other.page_alloc_);
+      page_map_ = std::move(other.page_map_);
+      last_page_ = other.last_page_;
+      gcache_ = std::move(other.gcache_);
+      page_bnds_ = other.page_bnds_;
+      size_ = other.size_;
+      other.last_page_ = nullptr;
+      other.size_ = 0;
+    }
+    return *this;
   }
 
   /** Get size */
@@ -361,9 +495,7 @@ class VectorSet {
     // bkt_.Destroy();
   }
 
-  // Vector<T> &Get(int gpu_id) {
-  //   return gpus_[gpu_id];
-  // }
+  Vector<T> &Get(int gpu_id) { return gpus_[gpu_id]; }
 };
 
 }  // namespace eternia
