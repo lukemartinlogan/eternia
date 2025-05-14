@@ -43,13 +43,12 @@
     },
     {
       "name": "et_tensor",
-      "type": "cppdbg",
+      "type": "cuda-gdb",
       "request": "launch",
       "program": "${workspaceFolder}/build/bin/et_tensor",
       "args": [
         ""
       ],
-      "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
       "environment": [
         {
@@ -59,15 +58,6 @@
         {
           "name": "HERMES_CONF",
           "value": "/home/llogan/.jarvis/shared/eternia_run/hermes_run/hermes_server.yaml"
-        }
-      ],
-      "externalConsole": false,
-      "MIMode": "gdb",
-      "setupCommands": [
-        {
-          "description": "Enable pretty-printing for gdb",
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
         }
       ]
     },

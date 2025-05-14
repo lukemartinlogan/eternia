@@ -59,7 +59,7 @@ class EterniaUnitTests(Application):
         nprocs = self.config['nprocs']
         if self.config['nprocs'] is None:
             nprocs = len(self.jarvis.hostfile)
-        Exec(f'et_tensor',
+        Exec(f'compute-sanitizer et_tensor',
                 MpiExecInfo(nprocs=1,
                             ppn=1,
                             env=self.env,

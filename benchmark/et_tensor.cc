@@ -1,19 +1,20 @@
 #include <eternia/transactions/sequential.h>
 #include <eternia/vector.h>
 
-__global__ void VectorAdd(et::Vector<float> v[3], size_t N, size_t nthreads) {
+__global__ void VectorAdd(et::VectorCtx x_ctx, et::VectorCtx y_ctx,
+                          et::VectorCtx z_ctx, size_t N, size_t nthreads) {
   printf("Started vector add!\n");
   size_t size = (N / nthreads);
   size_t off = threadIdx.x * size;
-  v[0].LocalInit();
-  v[1].LocalInit();
-  v[2].LocalInit();
-  et::SeqTx a(v[0], off, size, ET_READ);
-  et::SeqTx b(v[1], off, size, ET_READ);
-  et::SeqTx c(v[2], off, size, ET_WRITE);
-  for (int i = 0; i < size; ++i) {
-    c[i] = a[i] + b[i];
-  }
+  et::Vector<float> x(x_ctx);
+  et::Vector<float> y(y_ctx);
+  // et::Vector<float> z(z_ctx);
+  // et::SeqTx a(v[0], off, size, ET_READ);
+  // et::SeqTx b(v[1], off, size, ET_READ);
+  // et::SeqTx c(v[2], off, size, ET_WRITE);
+  // for (int i = 0; i < size; ++i) {
+  //   c[i] = a[i] + b[i];
+  // }
   printf("Finished vector add!\n");
 }
 int main() {
@@ -23,7 +24,7 @@ int main() {
   et::VectorSet<float> y("y"), z("z");
   x.resize(1024);
   y.resize(1024);
-  et::Vector<float> vs[] = {x.Get(0), y.Get(0), z.Get(0)};
-  VectorAdd<<<1, 64>>>(vs, x.size(), 64);
+  z.resize(1024);
+  VectorAdd<<<1, 32>>>(x.Get(0), y.Get(0), z.Get(0), x.size(), 64);
   hshm::GpuApi::Synchronize();
 }
