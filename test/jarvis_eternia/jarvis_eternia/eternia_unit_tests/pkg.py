@@ -26,12 +26,6 @@ class EterniaUnitTests(Application):
         """
         return [
             {
-                'name': 'test_case',
-                'msg': 'Destroy previous configuration and rebuild',
-                'type': str,
-                'default': 'hermes'
-            },
-            {
                 'name': 'nprocs',
                 'msg': 'The number of processes to spawn',
                 'type': int,
@@ -65,9 +59,9 @@ class EterniaUnitTests(Application):
         nprocs = self.config['nprocs']
         if self.config['nprocs'] is None:
             nprocs = len(self.jarvis.hostfile)
-        Exec(f'test_ping_pong_exec',
-                MpiExecInfo(nprocs=2,
-                            ppn=2,
+        Exec(f'et_tensor',
+                MpiExecInfo(nprocs=1,
+                            ppn=1,
                             env=self.env,
                              do_dbg=self.config['do_dbg'],
                              dbg_port=self.config['dbg_port']))
@@ -79,7 +73,7 @@ class EterniaUnitTests(Application):
 
         :return: None
         """
-        Kill('.*test_hermes_exec.*',
+        Kill('.*et_tensor.*',
              PsshExecInfo(hostfile=self.jarvis.hostfile,
                           env=self.env))
 
