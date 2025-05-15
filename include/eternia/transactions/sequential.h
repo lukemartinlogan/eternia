@@ -24,8 +24,8 @@ class SeqTxIterator {
 
   HSHM_GPU_FUN
   SeqTxIterator &operator++() {
-    size_t rem = pos_ % vec_.ctx_.tcache_page_size_;
-    pos_ += vec_.ctx_.tcache_page_size_ - rem;
+    size_t rem = pos_ % vec_.tcache_page_size_;
+    pos_ += vec_.tcache_page_size_ - rem;
     if (pos_ >= size_) {
       pos_ = size_;
     }
@@ -50,7 +50,7 @@ class SeqTxIterator {
 
   HSHM_GPU_FUN
   PageRegion operator*() const {
-    return PageRegion(off_ + pos_, vec_.ctx_.tcache_page_size_,
+    return PageRegion(off_ + pos_, vec_.tcache_page_size_,
                       io_flags_ & ET_WRITE);
   }
 };
@@ -65,7 +65,7 @@ class SeqTx : public Transaction {
   size_t size_;            // Amount of data in transaction
   size_t head_ = 0;        // Prefetch head
   size_t tail_ = 0;        // Prefetch tail
-  size_t lookahead_ = 16;  // Prefetch lookahead
+  size_t lookahead_ = 16;  // Prefetch lookahead (in pages)
   IoFlags io_flags_;       // IO flags
 
   HSHM_GPU_FUN
@@ -86,6 +86,7 @@ class SeqTx : public Transaction {
     if (vec_->FindValInTcache(i + off_, val)) {
       return *val;
     }
+    printf("Failed even with prefetch!");
     return *val;
   }
 

@@ -223,24 +223,27 @@ class GpuCache {
       to_agg_sorted[i] = mem_task;
     }
     // Sort the memtasks by offset
-    hshm::sort(to_agg_sorted.begin(), to_agg_sorted.end(),
-               [](const MemTask &a, const MemTask &b) {
-                 return a.region_.off_ < b.region_.off_;
-               });
-    // Aggregate memtasks
-    chi::data::vector<MemTask> agg(CHI_CLIENT->data_alloc_);
-    agg.reserve(to_agg_sorted.size());
-    agg.emplace_back(to_agg_sorted[0]);
-    for (size_t i = 1; i < to_agg_sorted.size(); ++i) {
-      MemTask &cur = agg.back();
-      MemTask &next = to_agg_sorted[i];
-      if (cur.region_.off_ + cur.region_.size_ == next.region_.off_) {
-        cur.region_.size_ += next.region_.size_;
-      } else {
-        agg.emplace_back(cur);
-      }
-    }
-    return agg;
+    // hshm::sort(to_agg_sorted.begin(), to_agg_sorted.end(),
+    //            [](const MemTask &a, const MemTask &b) {
+    //              return a.region_.off_ < b.region_.off_;
+    //            });
+    // // Aggregate memtasks
+    // chi::data::vector<MemTask> agg(CHI_CLIENT->data_alloc_);
+    // agg.reserve(to_agg_sorted.size());
+    // agg.emplace_back(to_agg_sorted[0]);
+    // for (size_t i = 1; i < to_agg_sorted.size(); ++i) {
+    //   MemTask &cur = agg.back();
+    //   MemTask &next = to_agg_sorted[i];
+    //   size_t cur_region_end = cur.region_.off_ + cur.region_.size_;
+    //   size_t next_region_end = next.region_.off_ + next.region_.size_;
+    //   if (cur_region_end >= next.region_.off_) {
+    //     cur.region_.size_ = next_region_end - cur.region_.off_;
+    //   } else {
+    //     agg.emplace_back(cur);
+    //   }
+    // }
+    // return agg;
+    return to_agg_sorted;
   }
 
   /** Process a memory task */
@@ -309,7 +312,7 @@ class GpuCache {
     hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
     hermes::Blob blob(md->data_ + region.off_, region.size_, false);
     chi::string blob_name = MakeBlobName(region);
-    bkt.PartialGet(blob_name, blob, region.off_);
+    // bkt.PartialGet(blob_name, blob, region.off_);
     return true;
   }
 

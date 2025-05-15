@@ -9,8 +9,8 @@
 
 namespace eternia {
 
-#define DEFAULT_TCACHE_PAGE_SIZE 512
-#define DEFAULT_TCACHE_SLOTS 4
+#define DEFAULT_TCACHE_PAGE_SIZE 4096
+#define DEFAULT_TCACHE_SLOTS 256
 #define TCACHE_MIN_SCORE 0.8
 
 #define TCACHE_TEMPLATE_PARAMS                            \
@@ -24,14 +24,14 @@ namespace eternia {
 
 template <TCACHE_TEMPLATE_PARAMS>
 struct StaticPage {
-  char buf[TCACHE_PAGE_SIZE];
+  char buf_[TCACHE_PAGE_SIZE];
   size_t id_;
   float score_;
   StaticPage *next_;
 };
 
 template <TCACHE_TEMPLATE_PARAMS>
-struct PageAllocator {
+struct StaticPageAllocator {
   typedef StaticPage<TCACHE_TEMPLATE_PASS_ARGS> Page;
   size_t head_ = 0, tail_ = 0;
   size_t PAGE_SIZE;
@@ -40,7 +40,7 @@ struct PageAllocator {
 
   /** Default constructor */
   HSHM_INLINE_CROSS_FUN
-  PageAllocator() {
+  StaticPageAllocator() {
     memset(pages_, 0, sizeof(pages_));
     memset(alloc_, 0, sizeof(alloc_));
   }
@@ -67,13 +67,13 @@ struct PageAllocator {
 };
 
 template <TCACHE_TEMPLATE_PARAMS>
-struct PageMap {
+struct StaticPageMap {
   typedef StaticPage<TCACHE_TEMPLATE_PASS_ARGS> Page;
   Page *bkts_[DEPTH];
 
   /** Default constructor */
   HSHM_INLINE_CROSS_FUN
-  PageMap() { memset(bkts_, 0, sizeof(bkts_)); }
+  StaticPageMap() { memset(bkts_, 0, sizeof(bkts_)); }
 
   /** Emplace page into map */
   HSHM_INLINE_CROSS_FUN
@@ -142,10 +142,12 @@ class Vector : public VectorCtx {
  public:
   typedef T Type;
   typedef StaticPage<TCACHE_TEMPLATE_PASS_ARGS> Page;
+  typedef StaticPageAllocator<TCACHE_TEMPLATE_PASS_ARGS> PageAllocator;
+  typedef StaticPageMap<TCACHE_TEMPLATE_PASS_ARGS> PageMap;
 
  public:
-  PageAllocator<TCACHE_TEMPLATE_PASS_ARGS> page_alloc_;
-  PageMap<TCACHE_TEMPLATE_PASS_ARGS> page_map_;
+  PageAllocator *page_alloc_;
+  PageMap *page_map_;
   Page *last_page_ = nullptr;
   size_t page_bnds_ = 0;  // A counter for number of page boundaries crossed
 
@@ -156,15 +158,27 @@ class Vector : public VectorCtx {
 
   /** Emplace constructor */
   HSHM_INLINE_CROSS_FUN
-  Vector(const VectorCtx &ctx) : VectorCtx(ctx) {}
+  Vector(const VectorCtx &ctx) : VectorCtx(ctx) {
+    page_alloc_ = (PageAllocator *)malloc(sizeof(PageAllocator));
+    page_map_ = (PageMap *)malloc(sizeof(PageMap));
+  }
+
+  /** Get page allocator */
+  HSHM_INLINE_CROSS_FUN
+  PageAllocator &GetPageAlloc() { return *page_alloc_; }
+
+  /** Get page map */
+  HSHM_INLINE_CROSS_FUN
+  PageMap &GetPageMap() { return *page_map_; }
 
   /** Get size */
+  HSHM_INLINE_CROSS_FUN
   size_t size() const { return vec_size_; }
 
   /** Locally rescore a tcache page */
   HSHM_INLINE_GPU_FUN
   void SuggestScore(const PageRegion &region, float score) {
-    Page *page = page_map_.Find(region);
+    Page *page = GetPageMap().Find(region);
     if (page) {
       page->score_ = score;
       if (score < TCACHE_MIN_SCORE && region.modified_) {
@@ -176,7 +190,7 @@ class Vector : public VectorCtx {
   /** Locally rescore a tcache page */
   HSHM_INLINE_GPU_FUN
   void SolidifyScore(const PageRegion &region, float score) {
-    Page *page = page_map_.Find(region);
+    Page *page = GetPageMap().Find(region);
     // Prioritize previously suggested page score
     if (page && score < page->score_) {
       return;
@@ -231,7 +245,7 @@ class Vector : public VectorCtx {
     }
     // Check the hash pointer
     page_bnds_++;
-    page = page_map_.Find(page_id);
+    page = GetPageMap().Find(page_id);
     return page != nullptr;
   }
 
@@ -248,11 +262,11 @@ class Vector : public VectorCtx {
   HSHM_INLINE_GPU_FUN
   Page *AllocatePage(size_t off) {
     PageRegion page_id(off, tcache_page_size_);
-    Page *page = page_alloc_.Allocate();
+    Page *page = GetPageAlloc().Allocate();
     if (!page) {
       return nullptr;
     }
-    page_map_.Emplace(page_id, page);
+    GetPageMap().Emplace(page_id, page);
     return page;
   }
 
@@ -260,7 +274,7 @@ class Vector : public VectorCtx {
   HSHM_INLINE_GPU_FUN
   void FreePage(size_t off) {
     PageRegion page_id(off, tcache_page_size_);
-    Page *page = page_map_.Remove(page_id);
+    Page *page = GetPageMap().Remove(page_id);
     if (page == last_page_) {
       last_page_ = nullptr;
     }
@@ -270,18 +284,18 @@ class Vector : public VectorCtx {
   HSHM_INLINE_GPU_FUN
   Page *FaultPage(const PageRegion &page_id, float score) {
     // Make sure page is not already in tcache
-    Page *page = page_map_.Find(page_id);
+    Page *page = GetPageMap().Find(page_id);
     if (page) {
       return page;
     }
     // Create page in tcache
-    page = page_alloc_.Allocate();
+    page = GetPageAlloc().Allocate();
     if (!page) {
       return nullptr;
     }
     page->id_ = page_id.id_;
     page->score_ = score;
-    page_map_.Emplace(page_id, page);
+    GetPageMap().Emplace(page_id, page);
     // Copy page from gcache (if exists)
     MemTask mem_task;
     mem_task.op_ = GcacheOp::kFault;
@@ -303,7 +317,7 @@ class Vector : public VectorCtx {
   /** Flush page to gcache */
   HSHM_INLINE_GPU_FUN
   void FlushPage(const PageRegion &region) {
-    Page *page = page_map_.Find(region);
+    Page *page = GetPageMap().Find(region);
     if (!page) {
       return;
     }
@@ -319,9 +333,9 @@ class Vector : public VectorCtx {
   /** Evict page from tcache */
   HSHM_INLINE_GPU_FUN
   void InvalidatePage(const PageRegion &region) {
-    Page *page = page_map_.Remove(region);
+    Page *page = GetPageMap().Remove(region);
     if (page) {
-      page_alloc_.Free(page);
+      GetPageAlloc().Free(page);
     }
   }
 };
