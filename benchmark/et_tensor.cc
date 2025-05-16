@@ -46,30 +46,27 @@ __global__ void VectorAdd(et::VectorCtx x_ctx, et::VectorCtx y_ctx,
   printf("Finished vector add!\n");
 }
 
-int main() {
+void TestHermesPut() {
   HERMES_INIT();
-  printf("HERE???\n");
   et::VectorSet<float> x("/bigvec.parquet");
   x.resize(1024);
   hshm::Timer t;
   t.Resume();
-  // auto *mux = hshm::GpuApi::MallocManaged<Mutex>(sizeof(Mutex));
-  // hipc::Allocator::ConstructObj(*mux);
-  HermesPut<<<32, 32>>>(x.Get(0), MEGABYTES(1), 1);
-  // TestMutex<<<256, 256>>>(mux);
+  HermesPut<<<16, 32>>>(x.Get(0), MEGABYTES(1), 1);
   hshm::GpuApi::Synchronize();
   t.Pause();
   printf("TOTAL TIME: %lf msec", t.GetMsec());
 }
 
-// int main() {
-//   ETERNIA_INIT();
-//   printf("HERE???\n");
-//   et::VectorSet<float> x("/bigvec.parquet");
-//   et::VectorSet<float> y("y"), z("z");
-//   x.resize(1024);
-//   y.resize(1024);
-//   z.resize(1024);
-//   VectorAdd<<<1, 1>>>(x.Get(0), y.Get(0), z.Get(0), x.size(), 64);
-//   hshm::GpuApi::Synchronize();
-// }
+void TestEterniaSequential() {
+  ETERNIA_INIT();
+  et::VectorSet<float> x("/bigvec.parquet");
+  et::VectorSet<float> y("y"), z("z");
+  x.resize(1024);
+  y.resize(1024);
+  z.resize(1024);
+  VectorAdd<<<1, 1>>>(x.Get(0), y.Get(0), z.Get(0), x.size(), 64);
+  hshm::GpuApi::Synchronize();
+}
+
+int main() { TestEterniaSequential(); }

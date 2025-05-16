@@ -105,6 +105,7 @@ struct MdBucket : public hipc::ShmContainer {
   chi::data::ipc::slist<Metadata> md_list_;
   hipc::RwLock md_lock_;
 
+  HSHM_INLINE_CROSS_FUN
   MdBucket(const hipc::CtxAllocator<CHI_DATA_ALLOC_T> &alloc)
       : md_list_(alloc) {}
 
