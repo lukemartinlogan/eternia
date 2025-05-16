@@ -67,7 +67,7 @@ int main() {
   // TestMutex<<<256, 256>>>(mux);
   hshm::GpuApi::Synchronize();
   t.Pause();
-  printf("TOTAL TIME: %lf usec", t.GetUsec());
+  printf("TOTAL TIME: %lf msec", t.GetMsec());
 }
 
 // int main() {
