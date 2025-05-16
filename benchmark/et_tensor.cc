@@ -70,6 +70,8 @@ void TestHermesPut() {
 }
 
 void TestVectorAddEmu(size_t block, size_t warp, size_t size) {
+  printf("Vector add emu with block=%llu warp=%llu and size=%llu\n", block,
+         warp, size);
   hshm::Timer t;
   t.Resume();
   float *data = hshm::GpuApi::Malloc<float>(size);
