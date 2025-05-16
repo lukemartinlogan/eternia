@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
   size_t warp = 0;
   size_t size = 0;
 
-  if (argc > 4) {
+  if (argc >= 4) {
     block = atoi(argv[1]);
     warp = atoi(argv[2]);
     size = hshm::ConfigParse::ParseSize(argv[3]);
