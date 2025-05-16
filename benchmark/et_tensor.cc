@@ -50,8 +50,10 @@ __global__ void VectorAddEmu(float *data, size_t size, size_t nthreads) {
   size_t size_per_thread = size / nthreads;
   size_t tid = hshm::GpuApi::GetGlobalThreadId();
   size_t off = size_per_thread * tid;
-  for (size_t i = 0; i < size_per_thread; ++i) {
-    data[i] = i * 2 + off + 10;
+  for (int j = 0; j < 256; ++j) {
+    for (size_t i = 0; i < size_per_thread; ++i) {
+      data[i] = i * 2 + off + 10;
+    }
   }
 }
 
