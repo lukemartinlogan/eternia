@@ -32,6 +32,24 @@ class EterniaUnitTests(Application):
                 'default': None,
             },
             {
+                'name': 'block',
+                'msg': 'Size of block',
+                'type': int,
+                'default': None,
+            },
+            {
+                'name': 'warp',
+                'msg': 'Size of warp',
+                'type': int,
+                'default': None,
+            },
+            {
+                'name': 'size',
+                'msg': 'Size of memory',
+                'type': str,
+                'default': None,
+            },
+            {
                 'name': 'ppn',
                 'msg': 'The number of processes per node',
                 'type': int,
@@ -59,7 +77,14 @@ class EterniaUnitTests(Application):
         nprocs = self.config['nprocs']
         if self.config['nprocs'] is None:
             nprocs = len(self.jarvis.hostfile)
-        Exec(f'et_tensor',
+        cmd = [
+            'et_tensor',
+            str(self.config['block']),
+            str(self.config['warp']),
+            str(self.config['size'])
+        ]
+        cmd = ' '.join(cmd)
+        Exec(cmd,
                 MpiExecInfo(nprocs=1,
                             ppn=1,
                             env=self.env,
