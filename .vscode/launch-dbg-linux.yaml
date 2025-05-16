@@ -94,7 +94,7 @@ configurations:
     launch-name: et_tensor
     program: et_tensor
     args: [""]
-  - macro: ext_debug
+  - macro: ext_cuda_debug
     launch-name: chimaera
     program: /home/llogan/.scspkg/packages/iowarp_runtime/bin/chimaera_start_runtime
     args: [""]
