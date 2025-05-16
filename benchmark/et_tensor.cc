@@ -50,7 +50,7 @@ __global__ void VectorAddEmu(float *data, size_t size, size_t nthreads) {
   size_t size_per_thread = size / nthreads;
   size_t tid = hshm::GpuApi::GetGlobalThreadId();
   size_t off = size_per_thread * tid;
-  for (int j = 0; j < 256; ++j) {
+  for (int j = 0; j < 16; ++j) {
     for (size_t i = 0; i < size_per_thread; ++i) {
       data[i] = i * 2 + off + 10;
     }
@@ -73,7 +73,7 @@ void TestVectorAddEmu() {
   hshm::Timer t;
   t.Resume();
   float *data = hshm::GpuApi::Malloc<float>(GIGABYTES(8));
-  VectorAddEmu<<<32, 32>>>(data, GIGABYTES(8), 32 * 32);
+  VectorAddEmu<<<256, 256>>>(data, GIGABYTES(16), 256 * 256);
   hshm::GpuApi::Synchronize();
   t.Pause();
   printf("TOTAL TIME: %lf msec", t.GetMsec());
