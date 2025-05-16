@@ -69,11 +69,11 @@ void TestHermesPut() {
   printf("TOTAL TIME: %lf msec", t.GetMsec());
 }
 
-void TestVectorAddEmu() {
+void TestVectorAddEmu(size_t block, size_t warp, size_t size) {
   hshm::Timer t;
   t.Resume();
-  float *data = hshm::GpuApi::Malloc<float>(GIGABYTES(8));
-  VectorAddEmu<<<256, 256>>>(data, GIGABYTES(16), 256 * 256);
+  float *data = hshm::GpuApi::Malloc<float>(size);
+  VectorAddEmu<<<block, warp>>>(data, size, block * warp);
   hshm::GpuApi::Synchronize();
   t.Pause();
   printf("TOTAL TIME: %lf msec", t.GetMsec());
@@ -90,4 +90,15 @@ void TestEterniaSequential() {
   hshm::GpuApi::Synchronize();
 }
 
-int main() { TestVectorAddEmu(); }
+int main(int argc, char **argv) {
+  size_t block = 0;
+  size_t warp = 0;
+  size_t size = 0;
+
+  if (argc > 4) {
+    block = atoi(argv[1]);
+    warp = atoi(argv[2]);
+    size = hshm::ConfigParse::ParseSize(argv[3]);
+  }
+  TestVectorAddEmu(block, warp, size);
+}
