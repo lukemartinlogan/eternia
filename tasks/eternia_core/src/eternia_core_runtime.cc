@@ -35,8 +35,6 @@ HSHM_GPU_KERNEL static void InitEterniaRuntime(int qcount, int qdepth,
 template <typename QueueT>
 HSHM_GPU_FUN static void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
                                           QueueT &queue) {
-  // GpuCache::AGG_MAP_T agg_map(CHI_CLIENT->data_alloc_, 64);
-  // chi::data::unordered_map<int, int> agg_map(CHI_CLIENT->data_alloc_);
   printf("Polling eternia queue\n");
   // Get local thread context
   hipc::MemContext mctx;
@@ -44,7 +42,7 @@ HSHM_GPU_FUN static void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
   auto *main_alloc = CHI_CLIENT->main_alloc_;
   main_alloc->CreateTls(mctx);
   hipc::CtxAllocator<CHI_MAIN_ALLOC_T> ctx_alloc(mctx, main_alloc);
-  GpuCache::AGG_MAP_T agg_map(ctx_alloc);
+  GpuCache::AGG_MAP_T agg_map(ctx_alloc, 64);
 
   // Poll queues
   size_t count = queue.size();
