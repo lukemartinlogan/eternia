@@ -209,7 +209,9 @@ class GpuCache {
     for (auto it = agg_map.begin(); it != agg_map.end(); ++it) {
       MEM_TASK_SET_T &to_agg = (*it).GetVal();
       // Merge aggregated tasks
+      printf("Beginning to merge tasks\n");
       chi::vector<MemTask> merged = MergeMemTasks(ctx_alloc, to_agg);
+      printf("Merged tasks\n");
       // Process the merged tasks
       for (const MemTask &mem_task : merged) {
         ProcessMemTask(ctx_alloc, mem_task);

@@ -83,6 +83,7 @@ class SeqTx : public Transaction {
     }
     tail_ = i;
     Prefetch();
+    vec_->FaultPage(PageRegion{i, vec_->tcache_page_size_}, 1.0);
     if (vec_->FindValInTcache(i + off_, val)) {
       return *val;
     }

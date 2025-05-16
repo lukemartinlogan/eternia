@@ -97,7 +97,7 @@ void cufile_io(const std::string& filename, size_t transfer_size,
   CUfileHandle_t fh;
   CUfileDescr_t params;
   memset(&params, 0, sizeof(params));
-  int fd = open64(filename.c_str(), O_RDWR | O_CREAT | O_DIRECT, 0666);
+  int fd = open64(filename.c_str(), O_RDWR | O_CREAT, 0666);
   if (fd < 0) {
     int err = errno;
     std::cerr << "Error opening file: " << filename << " - " << strerror(err)

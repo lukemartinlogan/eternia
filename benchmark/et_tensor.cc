@@ -35,14 +35,14 @@ __global__ void VectorAdd(et::VectorCtx x_ctx, et::VectorCtx y_ctx,
   size_t size = (N / nthreads);
   size_t off = threadIdx.x * size;
   et::Vector<float> x(x_ctx);
-  // et::Vector<float> y(y_ctx);
-  // et::Vector<float> z(z_ctx);
-  // et::SeqTx a(x, off, size, ET_READ);
-  // et::SeqTx b(y, off, size, ET_READ);
-  // et::SeqTx c(z, off, size, ET_WRITE);
-  // for (int i = 0; i < size; ++i) {
-  //   c[i] = a[i] + b[i];
-  // }
+  et::Vector<float> y(y_ctx);
+  et::Vector<float> z(z_ctx);
+  et::SeqTx a(x, off, size, ET_READ);
+  et::SeqTx b(y, off, size, ET_READ);
+  et::SeqTx c(z, off, size, ET_WRITE);
+  for (int i = 0; i < size; ++i) {
+    c[i] = a[i] + b[i];
+  }
   printf("Finished vector add!\n");
 }
 

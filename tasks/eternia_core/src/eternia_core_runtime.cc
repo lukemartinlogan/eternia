@@ -42,18 +42,22 @@ HSHM_GPU_FUN static void PollEterniaQueue(hipc::FullPtr<GpuCache> gcache,
   auto *main_alloc = CHI_CLIENT->main_alloc_;
   main_alloc->CreateTls(mctx);
   hipc::CtxAllocator<CHI_MAIN_ALLOC_T> ctx_alloc(mctx, main_alloc);
+  printf("Making AGG map\n");
   GpuCache::AGG_MAP_T agg_map(ctx_alloc, 64);
+  printf("Created AGG map\n");
 
   // Poll queues
-  size_t count = queue.size();
-  for (size_t i = 0; i < count; ++i) {
-    MemTask task;
-    if (queue.pop(task).IsNull()) {
-      break;
-    }
-    gcache->AggregateTask(agg_map, &task);
-  }
-  gcache->ProcessMemTasks(ctx_alloc, agg_map);
+  // size_t count = queue.size();
+  // for (size_t i = 0; i < count; ++i) {
+  //   MemTask task;
+  //   if (queue.pop(task).IsNull()) {
+  //     break;
+  //   }
+  //   printf("Received task\n");
+  //   gcache->AggregateTask(agg_map, &task);
+  //   printf("Aggregated task\n");
+  // }
+  // gcache->ProcessMemTasks(ctx_alloc, agg_map);
 }
 
 HSHM_GPU_KERNEL static void PollCpuQueue(hipc::Pointer gcache_p) {
@@ -113,13 +117,13 @@ class Server : public Module {
            sizeof(FullPtr<GpuCache>) * CHI_CLIENT->ngpu_);
     task->SetParams(params);
     // Get the dimensions of the polling function
-    poll_block_ = params.qcount_ / 1024;
-    poll_thread_ = params.qcount_ % 1024;
+    poll_block_ = params.qcount_ / 512;
+    poll_thread_ = params.qcount_ % 512;
     if (poll_block_ == 0) {
       poll_block_ = 1;
     }
     if (poll_thread_ == 0) {
-      poll_thread_ = 1024;
+      poll_thread_ = 512;
     }
     // Begin polling the queues on this container
     reorg_ = client_.AsyncReorganize(HSHM_MCTX, DomainQuery::GetLocalHash(0));

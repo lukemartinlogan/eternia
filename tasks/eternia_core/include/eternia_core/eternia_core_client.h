@@ -27,7 +27,11 @@ class Client : public ModuleClient {
  public:
   /** Default constructor */
   HSHM_INLINE_CROSS_FUN
-  Client() = default;
+  Client() {
+    for (int i = 0; i < HSHM_MAX_GPUS; ++i) {
+      gcache_[i] = FullPtr<GpuCache>::GetNull();
+    }
+  }
 
   /** Destructor */
   HSHM_INLINE_CROSS_FUN

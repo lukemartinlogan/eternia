@@ -35,7 +35,7 @@ struct CreateTaskParams {
 
   template <typename Ar>
   HSHM_INLINE_CROSS_FUN void serialize(Ar &ar) {
-    ar(hermes_, qcount_, qdepth_);
+    ar(hermes_, qcount_, qdepth_, gcache_);
   }
 };
 typedef chi::Admin::CreatePoolBaseTask<CreateTaskParams> CreateTask;

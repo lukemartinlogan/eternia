@@ -161,6 +161,7 @@ class Vector : public VectorCtx {
   Vector(const VectorCtx &ctx) : VectorCtx(ctx) {
     page_alloc_ = (PageAllocator *)malloc(sizeof(PageAllocator));
     page_map_ = (PageMap *)malloc(sizeof(PageMap));
+    gcache_ = hipc::FullPtr<GpuCache>(gcache_.shm_);
   }
 
   /** Get page allocator */
@@ -230,6 +231,41 @@ class Vector : public VectorCtx {
     return true;
   }
 
+  /** Fault page from gcache into tcache */
+  HSHM_INLINE_GPU_FUN
+  Page *FaultPage(const PageRegion &page_id, float score) {
+    // Make sure page is not already in tcache
+    Page *page = GetPageMap().Find(page_id);
+    if (page) {
+      return page;
+    }
+    // Create page in tcache
+    page = GetPageAlloc().Allocate();
+    if (!page) {
+      return nullptr;
+    }
+    page->id_ = page_id.id_;
+    page->score_ = score;
+    GetPageMap().Emplace(page_id, page);
+    // Copy page from gcache (if exists)
+    MemTask mem_task;
+    mem_task.op_ = GcacheOp::kFault;
+    mem_task.tag_id_ = bkt_.id_;
+    mem_task.region_ = page_id.ChangePageSize(gcache_page_size_);
+    bool ret = gcache_->Read(mem_task, page->buf_ + page_id.off_);
+    if (ret) {
+      return page;
+    }
+    // Copy page into gcache
+    gcache_->SubmitMemTask(mem_task);
+    do {
+      // Wait for page to be created
+      ret = gcache_->Read(mem_task, page->buf_ + page_id.off_);
+      HSHM_THREAD_MODEL->Yield();
+    } while (!ret);
+    return page;
+  }
+
  private:
   /** Find page containing offset off in tcache, given PageRegion
    * @param off Offset is in units of T.
@@ -278,40 +314,6 @@ class Vector : public VectorCtx {
     if (page == last_page_) {
       last_page_ = nullptr;
     }
-  }
-
-  /** Fault page from gcache into tcache */
-  HSHM_INLINE_GPU_FUN
-  Page *FaultPage(const PageRegion &page_id, float score) {
-    // Make sure page is not already in tcache
-    Page *page = GetPageMap().Find(page_id);
-    if (page) {
-      return page;
-    }
-    // Create page in tcache
-    page = GetPageAlloc().Allocate();
-    if (!page) {
-      return nullptr;
-    }
-    page->id_ = page_id.id_;
-    page->score_ = score;
-    GetPageMap().Emplace(page_id, page);
-    // Copy page from gcache (if exists)
-    MemTask mem_task;
-    mem_task.op_ = GcacheOp::kFault;
-    mem_task.tag_id_ = bkt_.id_;
-    mem_task.region_ = page_id.ChangePageSize(gcache_page_size_);
-    bool ret = gcache_->Read(mem_task, page->buf_ + page_id.off_);
-    if (ret) {
-      return page;
-    }
-    // Copy page into gcache
-    gcache_->SubmitMemTask(mem_task);
-    do {
-      // Wait for page to be created
-      ret = gcache_->Read(mem_task, page->buf_ + page_id.off_);
-    } while (!ret);
-    return page;
   }
 
   /** Flush page to gcache */
