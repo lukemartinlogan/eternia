@@ -69,6 +69,22 @@ void TestHermesPut() {
   printf("TOTAL TIME: %lf msec", t.GetMsec());
 }
 
+void CudaMemcpy(size_t size) {
+  printf("Vector add emu with block=%llu warp=%llu and size=%llu\n", block,
+         warp, size);
+  hshm::Timer t;
+  t.Resume();
+  hshm::GpuApi::SetDevice(0);
+  char *data;
+  cudaMallocHost(&data, size * sizeof(char));
+  memset(data, 'A', size * sizeof(char));
+  cudaMalloc(&data, size * sizeof(char));
+  cudaMemcpy(data, data, size * sizeof(char), cudaMemcpyHostToDevice);
+  hshm::GpuApi::Synchronize();
+  t.Pause();
+  printf("TOTAL TIME: %lf msec", t.GetMsec());
+}
+
 void TestVectorAddEmu(size_t block, size_t warp, size_t size) {
   printf("Vector add emu with block=%llu warp=%llu and size=%llu\n", block,
          warp, size);
@@ -103,5 +119,6 @@ int main(int argc, char **argv) {
     warp = atoi(argv[2]);
     size = hshm::ConfigParse::ParseSize(argv[3]);
   }
-  TestVectorAddEmu(block, warp, size);
+  // TestVectorAddEmu(block, warp, size);
+  CudaMemcpy(size);
 }
