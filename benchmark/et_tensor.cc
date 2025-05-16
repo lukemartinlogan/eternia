@@ -46,6 +46,15 @@ __global__ void VectorAdd(et::VectorCtx x_ctx, et::VectorCtx y_ctx,
   printf("Finished vector add!\n");
 }
 
+__global__ void VectorAddEmu(float *data, size_t size, size_t nthreads) {
+  size_t size_per_thread = size / nthreads;
+  size_t tid = hshm::GpuApi::GetGlobalThreadId();
+  size_t off = size_per_thread * tid;
+  for (size_t i = 0; i < size_per_thread; ++i) {
+    data[i] = i * 2 + off + 10;
+  }
+}
+
 void TestHermesPut() {
   HERMES_INIT();
   et::VectorSet<float> x("/bigvec.parquet");
@@ -53,6 +62,16 @@ void TestHermesPut() {
   hshm::Timer t;
   t.Resume();
   HermesPut<<<16, 32>>>(x.Get(0), MEGABYTES(1), 1);
+  hshm::GpuApi::Synchronize();
+  t.Pause();
+  printf("TOTAL TIME: %lf msec", t.GetMsec());
+}
+
+void TestVectorAddEmu() {
+  hshm::Timer t;
+  t.Resume();
+  float *data = hshm::GpuApi::Malloc<float>(GIGABYTES(8));
+  VectorAddEmu<<<32, 32>>>(data, GIGABYTES(8), 32 * 32);
   hshm::GpuApi::Synchronize();
   t.Pause();
   printf("TOTAL TIME: %lf msec", t.GetMsec());
@@ -69,4 +88,4 @@ void TestEterniaSequential() {
   hshm::GpuApi::Synchronize();
 }
 
-int main() { TestEterniaSequential(); }
+int main() { TestVectorAddEmu(); }
