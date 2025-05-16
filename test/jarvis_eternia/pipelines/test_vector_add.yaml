@@ -7,3 +7,6 @@ pkgs:
     dbg_port: 4001
     nprocs: 1
     ppn: 1
+    block: 1
+    warp: 1
+    size: 16m

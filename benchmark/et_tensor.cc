@@ -74,7 +74,8 @@ void TestVectorAddEmu(size_t block, size_t warp, size_t size) {
          warp, size);
   hshm::Timer t;
   t.Resume();
-  float *data = hshm::GpuApi::Malloc<float>(size);
+  hshm::GpuApi::SetDevice(0);
+  float *data = hshm::GpuApi::Malloc<float>(size * sizeof(float));
   VectorAddEmu<<<block, warp>>>(data, size, block * warp);
   hshm::GpuApi::Synchronize();
   t.Pause();

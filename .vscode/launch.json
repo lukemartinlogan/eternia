@@ -47,7 +47,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/bin/et_tensor",
       "args": [
-        ""
+        "1 1 16m"
       ],
       "cwd": "${workspaceFolder}",
       "environment": [

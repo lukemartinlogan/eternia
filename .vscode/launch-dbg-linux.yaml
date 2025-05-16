@@ -93,7 +93,7 @@ configurations:
   - macro: cuda_debug
     launch-name: et_tensor
     program: et_tensor
-    args: [""]
+    args: ["1 1 16m"]
   - macro: ext_cuda_debug
     launch-name: chimaera
     program: /home/llogan/.scspkg/packages/iowarp_runtime/bin/chimaera_start_runtime

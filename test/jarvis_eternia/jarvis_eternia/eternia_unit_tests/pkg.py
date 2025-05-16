@@ -84,6 +84,7 @@ class EterniaUnitTests(Application):
             str(self.config['size'])
         ]
         cmd = ' '.join(cmd)
+        print(cmd)
         Exec(cmd,
                 MpiExecInfo(nprocs=1,
                             ppn=1,
