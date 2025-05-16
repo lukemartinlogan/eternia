@@ -10,31 +10,23 @@ chi::string MakeBlobName(hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &alloc,
   return blob_name;
 }
 
-__global__ void HermesPut(et::VectorCtx x_ctx, size_t N, size_t nthreads) {
-  printf("Started vector add!\n");
-  size_t size = (N / nthreads);
-  size_t off = threadIdx.x * size;
+__global__ void HermesPut(et::VectorCtx x_ctx, size_t size, int count) {
+  printf("Started hermes put kernel: %llu!\n",
+         hshm::GpuApi::GetGlobalThreadId());
   et::Vector<float> x(x_ctx);
   auto *main_alloc = CHI_CLIENT->main_alloc_;
   hipc::MemContext mctx;
   mctx.tid_ = hshm::ThreadId(hshm::GpuApi::GetGlobalThreadId());
   main_alloc->CreateTls(mctx);
   hipc::CtxAllocator<CHI_MAIN_ALLOC_T> ctx_alloc(mctx, main_alloc);
-  printf("Scoped TLS aquired!\n");
   hermes::Context ctx;
   ctx.mctx_ = ctx_alloc.ctx_;
   hermes::Bucket bkt(x.bkt_.id_, x.bkt_.mdm_, ctx);
-  printf("Bucket made!\n");
-  hermes::Blob blob(MEGABYTES(1));
-  printf("Creating blob!\n");
-  chi::string blob_name = MakeBlobName(ctx_alloc, off);
-  printf("Made blob name!\n");
-  if (hshm::GpuApi::GetGlobalThreadId() == 0) {
-    for (int i = 0; i < 1; ++i) {
-      bkt.Put(blob_name, blob, ctx);
-    }
+  hermes::Blob blob(size);
+  chi::string blob_name = MakeBlobName(ctx_alloc, ctx.mctx_.tid_.tid_);
+  for (int i = 0; i < count; ++i) {
+    bkt.Put(blob_name, blob, ctx);
   }
-  printf("Finished vector add!\n");
 }
 
 __global__ void VectorAdd(et::VectorCtx x_ctx, et::VectorCtx y_ctx,
@@ -63,7 +55,7 @@ int main() {
   t.Resume();
   // auto *mux = hshm::GpuApi::MallocManaged<Mutex>(sizeof(Mutex));
   // hipc::Allocator::ConstructObj(*mux);
-  HermesPut<<<2, 32>>>(x.Get(0), x.size(), 64);
+  HermesPut<<<32, 32>>>(x.Get(0), MEGABYTES(1), 1);
   // TestMutex<<<256, 256>>>(mux);
   hshm::GpuApi::Synchronize();
   t.Pause();

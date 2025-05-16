@@ -3,6 +3,7 @@
 
 #include <hermes/hermes.h>
 #include <hermes_shm/constants/macros.h>
+#include <hermes_shm/util/gpu_api.h>
 
 #include "constants.h"
 
@@ -130,6 +131,7 @@ class GpuCache {
   hermes::Client mdm_;
   int nthreads_;  // Number of gcache workers
 
+#ifdef HSHM_ENABLE_CUDA_OR_ROCM
  public:
   HSHM_GPU_FUN
   GpuCache(int count, int depth, hermes::Client mdm)
@@ -380,13 +382,27 @@ class GpuCache {
     // Flush the page
     hipc::FullPtr<char> page(md->data_);
     const PageRegion &region = mem_task.region_;
-    hipc::ScopedTlsAllocator<CHI_MAIN_ALLOC_T> tls(CHI_CLIENT->main_alloc_);
+    auto *main_alloc = CHI_CLIENT->main_alloc_;
+    hipc::MemContext mctx;
+    mctx.tid_ = hshm::ThreadId(hshm::GpuApi::GetGlobalThreadId());
+    main_alloc->CreateTls(mctx);
+    hipc::CtxAllocator<CHI_MAIN_ALLOC_T> ctx_alloc(mctx, main_alloc);
     hermes::Context ctx;
-    ctx.mctx_ = tls.alloc_.ctx_;
+    ctx.mctx_ = ctx_alloc.ctx_;
     hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
     hermes::Blob blob(md->data_ + region.off_, region.size_, false);
     chi::string blob_name = MakeBlobName(region);
     bkt.PartialPut(blob_name, blob, region.off_);
+
+    // hipc::FullPtr<char> page(md->data_);
+    // const PageRegion &region = mem_task.region_;
+    // hipc::ScopedTlsAllocator<CHI_MAIN_ALLOC_T> tls(CHI_CLIENT->main_alloc_);
+    // hermes::Context ctx;
+    // ctx.mctx_ = tls.alloc_.ctx_;
+    // hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
+    // hermes::Blob blob(md->data_ + region.off_, region.size_, false);
+    // chi::string blob_name = MakeBlobName(region);
+    // bkt.PartialPut(blob_name, blob, region.off_);
     return false;
   }
 
@@ -427,6 +443,7 @@ class GpuCache {
     }
     return md_bkt->md_list_.end();
   }
+#endif
 };
 
 }  // namespace eternia
