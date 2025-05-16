@@ -122,8 +122,8 @@ class GpuCache {
   typedef chi::data::ipc::vector<GPU_QUEUE_T> GPU_QUEUE_MAP_T;
   typedef chi::data::ipc::vector<MdBucket> MD_CACHE_T;
   typedef MdBucket::MD_LIST_T::iterator_t MD_LIST_ITER_T;
-  typedef chi::data::ipc::slist<MemTask> MEM_TASK_SET_T;
-  typedef chi::data::unordered_map<MemTask, MEM_TASK_SET_T, MemTask> AGG_MAP_T;
+  typedef chi::slist<MemTask> MEM_TASK_SET_T;
+  typedef chi::unordered_map<MemTask, MEM_TASK_SET_T, MemTask> AGG_MAP_T;
 
  public:
   CPU_QUEUE_T cpu_queue_;
@@ -203,14 +203,16 @@ class GpuCache {
   }
 
   /** Process memory tasks */
-  HSHM_GPU_FUN void ProcessMemTasks(AGG_MAP_T &agg_map) {
+  HSHM_GPU_FUN void ProcessMemTasks(
+      const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+      AGG_MAP_T &agg_map) {
     for (auto it = agg_map.begin(); it != agg_map.end(); ++it) {
       MEM_TASK_SET_T &to_agg = (*it).GetVal();
       // Merge aggregated tasks
-      chi::data::vector<MemTask> merged = MergeMemTasks(to_agg);
+      chi::vector<MemTask> merged = MergeMemTasks(ctx_alloc, to_agg);
       // Process the merged tasks
       for (const MemTask &mem_task : merged) {
-        ProcessMemTask(mem_task);
+        ProcessMemTask(ctx_alloc, mem_task);
       }
     }
   }
@@ -218,9 +220,11 @@ class GpuCache {
  private:
   /** Merge a group of memory tasks */
   HSHM_GPU_FUN
-  chi::data::vector<MemTask> MergeMemTasks(MEM_TASK_SET_T &to_agg) {
+  chi::vector<MemTask> MergeMemTasks(
+      const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+      MEM_TASK_SET_T &to_agg) {
     // Copy memtasks to vector
-    chi::data::vector<MemTask> to_agg_sorted(to_agg.size());
+    chi::vector<MemTask> to_agg_sorted(ctx_alloc, to_agg.size());
     size_t i = 0;
     for (MemTask &mem_task : to_agg) {
       to_agg_sorted[i] = mem_task;
@@ -231,7 +235,7 @@ class GpuCache {
                            return a.region_.off_ < b.region_.off_;
                          });
     // Aggregate memtasks
-    chi::data::vector<MemTask> agg(CHI_CLIENT->data_alloc_);
+    chi::vector<MemTask> agg(ctx_alloc);
     agg.reserve(to_agg_sorted.size());
     agg.emplace_back(to_agg_sorted[0]);
     for (size_t i = 1; i < to_agg_sorted.size(); ++i) {
@@ -246,50 +250,54 @@ class GpuCache {
       }
     }
     return agg;
-    return to_agg_sorted;
   }
 
   /** Process a memory task */
   HSHM_GPU_FUN
-  void ProcessMemTask(const MemTask &mem_task) {
+  void ProcessMemTask(const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+                      const MemTask &mem_task) {
     switch (mem_task.op_) {
       case GcacheOp::kRescore:
         // Rescore the page
-        Rescore(mem_task);
+        Rescore(ctx_alloc, mem_task);
         break;
       case GcacheOp::kFault:
-        Fault(mem_task);
+        Fault(ctx_alloc, mem_task);
         break;
       case GcacheOp::kFlush:
-        Flush(mem_task);
+        Flush(ctx_alloc, mem_task);
         break;
       case GcacheOp::kEvict:
-        Evict(mem_task);
+        Evict(ctx_alloc, mem_task);
         break;
     }
   }
 
   /** Rescore pages */
   HSHM_GPU_FUN
-  void Rescore(const MemTask &mem_task) {
+  void Rescore(const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+               const MemTask &mem_task) {
     if (mem_task.score_ >= GCACHE_MIN_SCORE) {
-      Fault(mem_task);
+      Fault(ctx_alloc, mem_task);
     } else {
-      Evict(mem_task);
+      Evict(ctx_alloc, mem_task);
     }
   }
 
   /** Make blob name */
   HSHM_GPU_FUN
-  chi::string MakeBlobName(const PageRegion &region) {
-    chi::string blob_name(CHI_CLIENT->main_alloc_, sizeof(size_t));
+  chi::string MakeBlobName(
+      const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+      const PageRegion &region) {
+    chi::string blob_name(ctx_alloc, sizeof(size_t));
     memcpy(blob_name.data(), &region.id_, sizeof(size_t));
     return blob_name;
   }
 
   /** Fault md + data into gcache */
   HSHM_GPU_FUN
-  bool Fault(const MemTask &mem_task) {
+  bool Fault(const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+             const MemTask &mem_task) {
     // Find or create bucket + metadata
     MdBucket *md_bkt;
     if (!FindBucket(mem_task, md_bkt)) {
@@ -299,7 +307,7 @@ class GpuCache {
     hipc::ScopedRwReadLock lock(md_bkt->md_lock_, 0);
     if (!FindMetadata(mem_task, md_bkt, md)) {
       md_bkt->md_lock_.ReadUnlock();
-      CreateMetadata(mem_task, md);
+      CreateMetadata(ctx_alloc, mem_task, md);
       md_bkt->md_lock_.ReadLock(0);
     }
     // Check if the data pointer is valid
@@ -309,19 +317,20 @@ class GpuCache {
     // Fault the page
     hipc::FullPtr<char> page(md->data_);
     const PageRegion &region = mem_task.region_;
-    hipc::ScopedTlsAllocator<CHI_MAIN_ALLOC_T> tls(CHI_CLIENT->main_alloc_);
+    auto *main_alloc = CHI_CLIENT->main_alloc_;
     hermes::Context ctx;
-    ctx.mctx_ = tls.alloc_.ctx_;
+    ctx.mctx_ = ctx_alloc.ctx_;
     hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
     hermes::Blob blob(md->data_ + region.off_, region.size_, false);
-    chi::string blob_name = MakeBlobName(region);
-    // bkt.PartialGet(blob_name, blob, region.off_);
+    chi::string blob_name = MakeBlobName(ctx_alloc, region);
+    bkt.PartialGet(blob_name, blob, region.off_);
     return true;
   }
 
   /** Get or create a metadata entry */
   HSHM_GPU_FUN
-  bool CreateMetadata(const MemTask &mem_task, Metadata *&md) {
+  bool CreateMetadata(const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+                      const MemTask &mem_task, Metadata *&md) {
     // Find bucket + metadata
     MdBucket *md_bkt;
     if (!FindBucket(mem_task, md_bkt)) {
@@ -339,14 +348,17 @@ class GpuCache {
   }
 
   /** Evict the page from gcache */
-  HSHM_INLINE_GPU_FUN void Evict(const MemTask &mem_task) {
-    Flush(mem_task);
-    Invalidate(mem_task);
+  HSHM_INLINE_GPU_FUN void Evict(
+      const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+      const MemTask &mem_task) {
+    Flush(ctx_alloc, mem_task);
+    Invalidate(ctx_alloc, mem_task);
   }
 
   /** Delete entry from gcache */
   HSHM_GPU_FUN
-  bool Invalidate(const MemTask &mem_task) {
+  bool Invalidate(const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+                  const MemTask &mem_task) {
     Metadata *md;
     // Don't do partial invalidations
     if (mem_task.region_.page_size_ != mem_task.region_.size_) {
@@ -369,7 +381,8 @@ class GpuCache {
 
   /** Flush entry to scache */
   HSHM_GPU_FUN
-  bool Flush(const MemTask &mem_task) {
+  bool Flush(const hipc::CtxAllocator<CHI_MAIN_ALLOC_T> &ctx_alloc,
+             const MemTask &mem_task) {
     // Find bucket + metadata
     MdBucket *md_bkt;
     if (!FindBucket(mem_task, md_bkt)) {
@@ -384,26 +397,12 @@ class GpuCache {
     hipc::FullPtr<char> page(md->data_);
     const PageRegion &region = mem_task.region_;
     auto *main_alloc = CHI_CLIENT->main_alloc_;
-    hipc::MemContext mctx;
-    mctx.tid_ = hshm::ThreadId(hshm::GpuApi::GetGlobalThreadId());
-    main_alloc->CreateTls(mctx);
-    hipc::CtxAllocator<CHI_MAIN_ALLOC_T> ctx_alloc(mctx, main_alloc);
     hermes::Context ctx;
     ctx.mctx_ = ctx_alloc.ctx_;
     hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
     hermes::Blob blob(md->data_ + region.off_, region.size_, false);
-    chi::string blob_name = MakeBlobName(region);
+    chi::string blob_name = MakeBlobName(ctx_alloc, region);
     bkt.PartialPut(blob_name, blob, region.off_);
-
-    // hipc::FullPtr<char> page(md->data_);
-    // const PageRegion &region = mem_task.region_;
-    // hipc::ScopedTlsAllocator<CHI_MAIN_ALLOC_T> tls(CHI_CLIENT->main_alloc_);
-    // hermes::Context ctx;
-    // ctx.mctx_ = tls.alloc_.ctx_;
-    // hermes::Bucket bkt(mem_task.tag_id_, mdm_, ctx);
-    // hermes::Blob blob(md->data_ + region.off_, region.size_, false);
-    // chi::string blob_name = MakeBlobName(region);
-    // bkt.PartialPut(blob_name, blob, region.off_);
     return false;
   }
 
