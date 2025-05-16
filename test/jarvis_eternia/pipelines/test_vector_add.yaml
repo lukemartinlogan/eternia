@@ -1,0 +1,9 @@
+name: eternia_run
+env: eternia
+pkgs:
+  - pkg_type: eternia_unit_tests
+    pkg_name: eternia_unit_tests
+    do_dbg: false
+    dbg_port: 4001
+    nprocs: 1
+    ppn: 1
