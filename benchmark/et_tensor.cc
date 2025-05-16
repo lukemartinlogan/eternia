@@ -69,7 +69,7 @@ void TestHermesPut() {
   printf("TOTAL TIME: %lf msec", t.GetMsec());
 }
 
-void CudaMemcpy(size_t size) {
+void CudaMemcpy(size_t block, size_t warp, size_t size) {
   printf("Vector add emu with block=%llu warp=%llu and size=%llu\n", block,
          warp, size);
   hshm::Timer t;
@@ -120,5 +120,5 @@ int main(int argc, char **argv) {
     size = hshm::ConfigParse::ParseSize(argv[3]);
   }
   // TestVectorAddEmu(block, warp, size);
-  CudaMemcpy(size);
+  CudaMemcpy(block, warp, size);
 }
